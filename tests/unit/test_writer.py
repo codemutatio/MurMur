@@ -16,16 +16,28 @@ def _make_writer(tmp_path: Path, clock: FixedClock | None = None) -> TranscriptW
 
 # AC-4
 def test_line_format_local_time(tmp_path: Path) -> None:  # [AC-4]
-    """Transcript line matches **[HH:MM]** <text> format with local time."""
+    """Transcript line contains the LOCAL-time HH:MM, not the UTC hour.
+
+    Passes a UTC datetime and verifies the written stamp matches the
+    local-time representation of that instant, not the raw UTC value.
+    Regex-only assertions are insufficient because they cannot distinguish
+    UTC from local time (F-1).
+    """
+    import re
+
     start = datetime(2026, 6, 12, 14, 30, 0, tzinfo=UTC)
     writer = _make_writer(tmp_path)
     path = writer.append(start, "Hello world")
     content = path.read_text(encoding="utf-8")
-    # The exact HH:MM depends on the local timezone; we check the format
-    import re
 
-    assert re.search(r"\*\*\[\d{2}:\d{2}\]\*\* Hello world", content), (
-        f"Line format mismatch in: {content!r}"
+    m = re.search(r"\*\*\[(\d{2}:\d{2})\]\*\* Hello world", content)
+    assert m is not None, f"Expected **[HH:MM]** Hello world pattern in: {content!r}"
+
+    rendered_time = m.group(1)
+    expected_local = f"{start.astimezone():%H:%M}"
+    assert rendered_time == expected_local, (
+        f"Writer rendered {rendered_time!r} but local-time of {start!r} is "
+        f"{expected_local!r}. AC-4 requires local-time stamp."
     )
 
 

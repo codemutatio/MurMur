@@ -50,7 +50,10 @@ class TranscriptWriter:
             existing = f"# Transcript — {date_str}\n\n"
 
         # Format new line: **[HH:MM]** text  (AC-4, local time)
-        new_line = f"**[{start_at:%H:%M}]** {text}\n\n"
+        # Convert to local timezone before formatting so the stamp reflects the
+        # wall-clock time on the user's machine, not the datetime's stored tz.
+        local_start = start_at.astimezone()
+        new_line = f"**[{local_start:%H:%M}]** {text}\n\n"
         content = existing + new_line
 
         # Write to temp, fsync, then atomically replace (ADR-2, R-9)
