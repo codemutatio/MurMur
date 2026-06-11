@@ -1,4 +1,5 @@
 """Base types for the transcription sub-system."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

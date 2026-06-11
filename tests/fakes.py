@@ -2,21 +2,18 @@
 
 Every fake is deterministic and side-effect-free in the default test suite.
 """
+
 from __future__ import annotations
 
-import queue
 import threading
 from collections import deque
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Callable, Sequence
+from collections.abc import Sequence
+from datetime import UTC, datetime
 
 import numpy as np
 
 from murmur.audio.source import AudioSourceError
-from murmur.mac.notify import Notifier
 from murmur.transcribe.base import TranscriptionError, TranscriptionResult
-
 
 # ---------------------------------------------------------------------------
 # FakeAudioSource
@@ -225,9 +222,7 @@ class FixedClock:
     """Injectable clock that advances on demand."""
 
     def __init__(self, initial: datetime | None = None) -> None:
-        self._now: datetime = initial or datetime(
-            2026, 6, 12, 9, 0, 0, tzinfo=timezone.utc
-        )
+        self._now: datetime = initial or datetime(2026, 6, 12, 9, 0, 0, tzinfo=UTC)
 
     def __call__(self) -> datetime:
         return self._now
@@ -252,9 +247,7 @@ class FakePermission:
     def __init__(self, statuses: Sequence[str]) -> None:
         from murmur.mac.permissions import PermissionStatus
 
-        self._statuses: deque[PermissionStatus] = deque(
-            PermissionStatus(s) for s in statuses
-        )
+        self._statuses: deque[PermissionStatus] = deque(PermissionStatus(s) for s in statuses)
         self._default: str = statuses[-1] if statuses else "GRANTED"
 
     def __call__(self) -> object:

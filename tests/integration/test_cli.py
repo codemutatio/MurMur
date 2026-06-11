@@ -1,4 +1,5 @@
 """Integration tests for CLI cat today / copy today — T-14, AC-11, AC-12."""
+
 from __future__ import annotations
 
 import os

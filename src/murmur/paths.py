@@ -2,6 +2,7 @@
 
 All paths are injectable via $MURMUR_HOME for test isolation.
 """
+
 from __future__ import annotations
 
 import os

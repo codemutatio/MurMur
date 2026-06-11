@@ -3,6 +3,7 @@
 Uses macOS `say` to generate real speech without binary fixtures or downloads.
 Model is bundled in the silero-vad wheel — no network required.
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -10,9 +11,8 @@ import wave
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from murmur.audio import FRAME_SAMPLES, SAMPLE_RATE
+from murmur.audio import FRAME_SAMPLES
 from murmur.audio.vad import SileroVAD
 
 
@@ -27,9 +27,12 @@ def _generate_speech_wav(path: Path, text: str = "Hello this is a test") -> None
     subprocess.run(
         [
             "afconvert",
-            "-f", "WAVE",
-            "-d", "LEI16@16000",
-            "-c", "1",
+            "-f",
+            "WAVE",
+            "-d",
+            "LEI16@16000",
+            "-c",
+            "1",
             str(aiff_path),
             str(path),
         ],
@@ -45,7 +48,7 @@ def _load_frames(path: Path) -> list[np.ndarray]:
         raw = wf.readframes(wf.getnframes())
     samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
     n = len(samples) // FRAME_SAMPLES
-    return [samples[i * FRAME_SAMPLES:(i + 1) * FRAME_SAMPLES] for i in range(n)]
+    return [samples[i * FRAME_SAMPLES : (i + 1) * FRAME_SAMPLES] for i in range(n)]
 
 
 def _silence_frames(n: int) -> list[np.ndarray]:
@@ -63,8 +66,7 @@ def test_detects_say_speech(tmp_path: Path) -> None:
     probs = [vad.speech_prob(f) for f in frames]
     max_prob = max(probs)
     assert max_prob > 0.5, (
-        f"SileroVAD did not detect speech in say-generated audio "
-        f"(max_prob={max_prob:.3f})"
+        f"SileroVAD did not detect speech in say-generated audio (max_prob={max_prob:.3f})"
     )
 
 
@@ -74,9 +76,7 @@ def test_rejects_silence(tmp_path: Path) -> None:
     # 30 frames = ~1 s of digital silence
     probs = [vad.speech_prob(f) for f in _silence_frames(30)]
     avg_prob = sum(probs) / len(probs)
-    assert avg_prob < 0.3, (
-        f"SileroVAD falsely detected speech in silence (avg_prob={avg_prob:.3f})"
-    )
+    assert avg_prob < 0.3, f"SileroVAD falsely detected speech in silence (avg_prob={avg_prob:.3f})"
 
 
 def test_reset_clears_state(tmp_path: Path) -> None:

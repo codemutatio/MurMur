@@ -3,6 +3,7 @@
 Uses stdlib wave (16-bit PCM mono 16 kHz). NO ffmpeg.
 Filenames encode the segment start time: YYYYMMDD-HHMMSS-mmm.wav
 """
+
 from __future__ import annotations
 
 import os

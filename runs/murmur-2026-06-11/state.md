@@ -7,7 +7,7 @@ PRD provided verbatim at `runs/murmur-2026-06-11/prd.md` — "Murmur": Personal 
 
 ## Current
 **Pipeline:** delivery
-**Stage:** INTAKE
+**Stage:** IMPLEMENT
 **Status:** running
 **Iteration counters:** validation iteration 0
 
@@ -22,9 +22,23 @@ PRD provided verbatim at `runs/murmur-2026-06-11/prd.md` — "Murmur": Personal 
 | 2026-06-11T23:29:57+0300 | Run created. Target repo: /Users/faithomojola/Documents/MurMur (empty dir, additional working directory) |
 | 2026-06-11T23:29:57+0300 | git init -b main in empty MurMur dir (no existing repo; greenfield). PRD saved to runs/murmur-2026-06-11/prd.md |
 | 2026-06-11T23:30:30+0300 | Sized L (greenfield app, new deps, privacy surface). Stage → INTAKE |
+| 2026-06-11T23:36:00+0300 | spec-writer completed: 27 R-ids, 30 ACs (20 AUTO / 10 MANUAL), 24 edge cases, 5 OQs |
+| 2026-06-11T23:38:00+0300 | Spec gate PASSED (all DoD § Spec boxes). Stage → PLAN |
+| 2026-06-11T23:54:00+0300 | architect completed: plan.md (20 tasks, all 30 ACs mapped, AC→test table), adr.md (2 ADRs) |
+| 2026-06-11T23:56:00+0300 | Plan gate PASSED (all DoD § Plan boxes). Stage → CHECKPOINT, awaiting human approval |
+| 2026-06-12T00:05:07+0300 | CHECKPOINT APPROVED by user: approve + all recommended OQ defaults + corrected OQ-2 guard semantics + KeepAlive=false. Size confirmed L. Stage → IMPLEMENT |
 
 ## Checkpoint Record
-**Approved:** pending · **Open-question answers:** pending · **Edits requested:** none
+**Approved:** 2026-06-12T00:05:07+0300 (user selected "Approve", size stays L) · **Edits requested:** none
+
+**Open-question answers (recorded verbatim from checkpoint):**
+- OQ-1: `local_model = "large-v3"` build-time default; bakeoff.py built early (T-10); model decision recorded at MV-24/MV-26 — a one-line config flip if turbo wins.
+- OQ-2: ARCHITECT'S CORRECTED semantics approved — drop when compression_ratio > 2.4 (repetition), plus no_speech_prob > 0.6 AND avg_logprob < -1.0, plus filler-phrase list. (Spec's "drop < 2.4 or > 4.5" recommendation explicitly rejected as inverted.)
+- OQ-3: pause state in `state.json` at `~/Library/Application Support/Murmur/` (MURMUR_HOME).
+- OQ-4: Unicode ●/⏸/⚠ strings as menubar title.
+- OQ-5: spool at `~/Transcripts/spool/`, configurable via `storage.spool_dir`.
+- Architect flag #8 (launchd): KeepAlive=false approved — Quit sticks, no auto-relaunch on crash.
+- Scope additions approved: `murmur bench`, `murmur install-agent`/`uninstall-agent` (thin tooling wrappers).
 
 ## Arbitrations
 <Disputed findings and the orchestrator's ruling, with reasoning. Empty until needed.>

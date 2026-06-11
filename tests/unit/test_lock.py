@@ -1,4 +1,5 @@
 """Tests for murmur.lock — T-13."""
+
 from __future__ import annotations
 
 from pathlib import Path

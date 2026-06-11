@@ -1,4 +1,5 @@
 """Build the Whisper initial_prompt from vocab hints (AC-18)."""
+
 from __future__ import annotations
 
 from collections.abc import Sequence

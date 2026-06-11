@@ -1,11 +1,11 @@
 """Tests for murmur.audio.segmenter — T-3."""
+
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import numpy as np
-import pytest
 
 from murmur.audio import FRAME_SAMPLES, SAMPLE_RATE
 from murmur.audio.segmenter import Segment, Segmenter, SegmenterConfig
@@ -39,9 +39,11 @@ def _make_segmenter(
     max_segment_s: float = 120.0,
     clock: FixedClock | None = None,
 ) -> tuple[Segmenter, FixedClock, AmplitudeVAD]:
-    c = clock or FixedClock(datetime(2026, 6, 12, 9, 0, 0, tzinfo=timezone.utc))
+    c = clock or FixedClock(datetime(2026, 6, 12, 9, 0, 0, tzinfo=UTC))
     vad = AmplitudeVAD(threshold=0.01)
-    cfg = _cfg(vad_threshold=vad_threshold, silence_split_s=silence_split_s, max_segment_s=max_segment_s)
+    cfg = _cfg(
+        vad_threshold=vad_threshold, silence_split_s=silence_split_s, max_segment_s=max_segment_s
+    )
     seg = Segmenter(cfg, vad, c)
     return seg, c, vad
 
@@ -93,7 +95,7 @@ def test_pre_post_roll_within_50ms() -> None:  # [AC-15]
     seg = segmenter.flush()
     # The segment should include pre-roll frames before speech
     # At 16 kHz / 512 samples = 32 ms/frame; 10 frames = 320 ms ≈ 0.3 s ± 50 ms
-    from murmur.audio import PRE_ROLL_S, POST_ROLL_S
+    from murmur.audio import POST_ROLL_S, PRE_ROLL_S
 
     pre_frames = round(PRE_ROLL_S * SAMPLE_RATE / FRAME_SAMPLES)
     post_frames = round(POST_ROLL_S * SAMPLE_RATE / FRAME_SAMPLES)
@@ -119,8 +121,7 @@ def test_pre_post_roll_within_50ms() -> None:  # [AC-15]
     expected_max = (pre_frames + speech_frames + post_frames + tolerance_frames) * FRAME_SAMPLES
     assert total_samples >= expected_min
     assert total_samples <= expected_max, (
-        f"Segment too long: {total_samples} samples "
-        f"(expected <= {expected_max})"
+        f"Segment too long: {total_samples} samples (expected <= {expected_max})"
     )
 
 
@@ -181,7 +182,7 @@ def test_short_blip_emitted() -> None:  # [E-20]
 
 def test_segment_start_time_matches_onset() -> None:
     """Segment start_at reflects the clock value at VAD onset."""
-    clock = FixedClock(datetime(2026, 6, 12, 10, 30, 0, tzinfo=timezone.utc))
+    clock = FixedClock(datetime(2026, 6, 12, 10, 30, 0, tzinfo=UTC))
     segmenter, _, _ = _make_segmenter(clock=clock)
 
     # Some pre-roll silence

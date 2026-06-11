@@ -3,6 +3,7 @@
 Deletes files matching the daily transcript pattern (YYYY-MM-DD.md) that are
 strictly older than ``retention_days`` days. 0 means keep forever (AC-10).
 """
+
 from __future__ import annotations
 
 import logging

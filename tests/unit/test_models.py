@@ -1,16 +1,15 @@
 """Tests for murmur.transcribe.models.ModelManager — T-15, R-24, E-18."""
+
 from __future__ import annotations
 
 import hashlib
 import json
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from murmur.transcribe.models import ChecksumError, ModelManager, MODEL_REPOS
-
+from murmur.transcribe.models import MODEL_REPOS, ChecksumError, ModelManager
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -52,12 +51,14 @@ def _make_fake_api(siblings: list[MagicMock]) -> MagicMock:
 def test_unknown_model_raises(tmp_path: Path) -> None:
     """ensure() raises ValueError for an unknown model name."""
     manager = ModelManager(cache_dir=tmp_path)
-    with pytest.raises(ValueError, match="Unknown model"):
-        with patch(
+    with (
+        pytest.raises(ValueError, match="Unknown model"),
+        patch(
             "murmur.transcribe.models.ModelManager._download",
             return_value=str(tmp_path / "snapshot"),
-        ):
-            manager.ensure("not-a-model")
+        ),
+    ):
+        manager.ensure("not-a-model")
 
 
 def test_checksum_pass_writes_marker(tmp_path: Path) -> None:  # [R-24]
@@ -101,12 +102,14 @@ def test_mismatch_deletes_and_raises(tmp_path: Path) -> None:  # [E-18]
 
     manager = ModelManager(cache_dir=tmp_path, api=api)
 
-    with patch(
-        "murmur.transcribe.models.ModelManager._download",
-        return_value=str(snapshot),
+    with (
+        patch(
+            "murmur.transcribe.models.ModelManager._download",
+            return_value=str(snapshot),
+        ),
+        pytest.raises(ChecksumError, match="Checksum mismatch"),
     ):
-        with pytest.raises(ChecksumError, match="Checksum mismatch"):
-            manager.ensure("large-v3")
+        manager.ensure("large-v3")
 
     # Snapshot directory should have been deleted
     assert not snapshot.exists(), "Snapshot dir should be deleted on checksum failure"

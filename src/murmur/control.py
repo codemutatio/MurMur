@@ -3,6 +3,7 @@
 This module is the sole cross-thread mutable state hub. Every field is guarded
 by a threading.Lock. No other module may directly mutate shared state.
 """
+
 from __future__ import annotations
 
 import json
@@ -232,9 +233,7 @@ class Controller:
         local_now = now.astimezone()
         from datetime import timedelta
 
-        next_day = local_now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(
-            days=1
-        )
+        next_day = local_now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         with self._lock:
             state = PauseState(mode=PauseMode.REST_OF_DAY, until=next_day)
             self._store.save(state)

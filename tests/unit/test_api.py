@@ -1,4 +1,5 @@
 """Tests for murmur.transcribe.api (OpenAITranscriber) — T-8."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -10,7 +11,9 @@ from murmur.transcribe.api import OpenAITranscriber
 from murmur.transcribe.base import TranscriptionError
 
 
-def _make_fake_client(response: str | Exception = "transcription text") -> tuple[MagicMock, MagicMock]:
+def _make_fake_client(
+    response: str | Exception = "transcription text",
+) -> tuple[MagicMock, MagicMock]:
     """Return (client_instance, factory) where factory() returns client_instance."""
     client = MagicMock()
     if isinstance(response, Exception):
@@ -81,6 +84,7 @@ def test_wav_encoding_is_in_memory() -> None:
     client, factory = _make_fake_client("text")
     t = OpenAITranscriber("gpt-4o-transcribe", "sk-fake", client_factory=factory)
     import io
+
     audio = np.random.default_rng(1).uniform(-0.5, 0.5, 16000).astype(np.float32)
     t.transcribe(audio, language="en", initial_prompt=None)
     file_arg = client.audio.transcriptions.create.call_args.kwargs["file"]

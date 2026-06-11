@@ -3,6 +3,7 @@
 Order: OPENAI_API_KEY env var → `security find-generic-password -s murmur-openai -w`.
 Keys are never logged.
 """
+
 from __future__ import annotations
 
 import subprocess

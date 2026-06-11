@@ -1,4 +1,5 @@
 """Tests for murmur.mac.keychain — T-2."""
+
 from __future__ import annotations
 
 import subprocess

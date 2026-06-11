@@ -3,6 +3,7 @@
 Renders, installs, and uninstalls the com.jay.murmur launchd plist.
 KeepAlive=false: Quit must stick (checkpoint-approved, plan flag #8).
 """
+
 from __future__ import annotations
 
 import logging

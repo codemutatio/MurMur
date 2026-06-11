@@ -1,4 +1,5 @@
 """Unit tests for CLI argument parsing and missing-file paths — T-14."""
+
 from __future__ import annotations
 
 from pathlib import Path

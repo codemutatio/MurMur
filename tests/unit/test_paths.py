@@ -1,9 +1,8 @@
 """Tests for murmur.paths — T-1."""
+
 from __future__ import annotations
 
 from pathlib import Path
-
-import pytest
 
 from murmur.paths import resolve_paths
 

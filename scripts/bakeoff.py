@@ -16,6 +16,7 @@ Transcribes the SAME audio through:
 Outputs a single Markdown file with four labeled sections + per-engine wall-time.
 Missing OPENAI_API_KEY → API sections contain "SKIPPED: ..." (script still completes).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -111,9 +112,9 @@ def main() -> int:
         print(f"Loading audio from {args.input} ...")
         audio = _load_audio(args.input)
     else:
-        ans = input(
-            f"\nReady to record {args.duration} s of audio. Continue? [y/N] "
-        ).strip().lower()
+        ans = (
+            input(f"\nReady to record {args.duration} s of audio. Continue? [y/N] ").strip().lower()
+        )
         if ans not in ("y", "yes"):
             print("Aborted.")
             return 0
@@ -133,7 +134,9 @@ def main() -> int:
     print("== Engine 1: mlx large-v3 ==")
     try:
         text, wall = _transcribe_local(audio, "large-v3", "mlx large-v3")
-        sections["mlx large-v3"] = f"**Wall time: {wall:.1f} s (RTF {audio_s/wall:.2f}x)**\n\n{text}"
+        sections["mlx large-v3"] = (
+            f"**Wall time: {wall:.1f} s (RTF {audio_s / wall:.2f}x)**\n\n{text}"
+        )
     except Exception as exc:
         sections["mlx large-v3"] = f"ERROR: {exc}"
     print("Done.")
@@ -142,7 +145,7 @@ def main() -> int:
     try:
         text, wall = _transcribe_local(audio, "large-v3-turbo", "mlx large-v3-turbo")
         sections["mlx large-v3-turbo"] = (
-            f"**Wall time: {wall:.1f} s (RTF {audio_s/wall:.2f}x)**\n\n{text}"
+            f"**Wall time: {wall:.1f} s (RTF {audio_s / wall:.2f}x)**\n\n{text}"
         )
     except Exception as exc:
         sections["mlx large-v3-turbo"] = f"ERROR: {exc}"
@@ -159,9 +162,7 @@ def main() -> int:
         else:
             try:
                 text, wall = _transcribe_api(audio, model_name, api_key)
-                sections[label] = (
-                    f"**Wall time: {wall:.1f} s**\n\n{text}"
-                )
+                sections[label] = f"**Wall time: {wall:.1f} s**\n\n{text}"
             except Exception as exc:
                 sections[label] = f"ERROR: {exc}"
         print("Done.")

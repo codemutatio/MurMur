@@ -1,4 +1,5 @@
 """Tests for murmur.transcribe.local (MlxWhisperTranscriber) — T-7."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch

@@ -1,9 +1,8 @@
 """Shared pytest fixtures for murmur test suite."""
+
 from __future__ import annotations
 
-import os
-import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -11,8 +10,6 @@ import pytest
 from tests.fakes import (
     AmplitudeVAD,
     FakeAudioSource,
-    FakeDiskFree,
-    FakePermission,
     FakeTranscriber,
     FixedClock,
     RecordingNotifier,
@@ -50,7 +47,7 @@ def notifier() -> RecordingNotifier:
 
 @pytest.fixture()
 def clock() -> FixedClock:
-    return FixedClock(datetime(2026, 6, 12, 9, 0, 0, tzinfo=timezone.utc))
+    return FixedClock(datetime(2026, 6, 12, 9, 0, 0, tzinfo=UTC))
 
 
 @pytest.fixture()

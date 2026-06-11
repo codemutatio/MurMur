@@ -1,12 +1,11 @@
 """Tests for OsascriptNotifier — T-17, R-11."""
+
 from __future__ import annotations
 
 import subprocess
 import threading
 import time
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import patch
 
 from murmur.mac.notify import OsascriptNotifier
 
@@ -51,11 +50,12 @@ def test_osascript_escapes_quotes() -> None:
 
     script = calls[0][-1]
     # Original quotes should be escaped
-    assert '\"' in script or '\\"' in script
+    assert '"' in script or '\\"' in script
 
 
 def test_notify_never_raises_on_subprocess_failure() -> None:
     """notify() does not raise even when osascript subprocess raises an exception."""
+
     def exploding_run(*args: object, **kwargs: object) -> None:
         raise RuntimeError("osascript not found")
 

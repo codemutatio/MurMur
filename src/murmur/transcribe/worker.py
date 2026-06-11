@@ -11,6 +11,7 @@ Failure policy (E-9):
     is ever constructed when fallback is None.
   - API fallback failure → leave WAV, increment errors, sleep backoff (E-10).
 """
+
 from __future__ import annotations
 
 import logging
@@ -140,9 +141,7 @@ class TranscribeWorker(threading.Thread):
                     except TranscriptionError as api_exc:
                         _log.error("API fallback failed for %s: %s", wav_path.name, api_exc)
                         self._status.increment_errors()
-                        _log.info(
-                            "Backing off %.0f s after fallback failure", self._backoff_s
-                        )
+                        _log.info("Backing off %.0f s after fallback failure", self._backoff_s)
                         # Sleep in small chunks so stop event is honoured
                         chunk = min(0.05, self._backoff_s)
                         elapsed = 0.0
@@ -152,9 +151,7 @@ class TranscribeWorker(threading.Thread):
                         return
                 else:
                     # No fallback — leave WAV in spool, increment errors (AC-7)
-                    _log.error(
-                        "No fallback configured; leaving %s in spool", wav_path.name
-                    )
+                    _log.error("No fallback configured; leaving %s in spool", wav_path.name)
                     self._status.increment_errors()
                     return
 

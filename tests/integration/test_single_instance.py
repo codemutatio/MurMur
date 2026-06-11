@@ -1,4 +1,5 @@
 """Integration test: single-instance enforcement — T-13, AC-6, E-15."""
+
 from __future__ import annotations
 
 import os
@@ -64,8 +65,7 @@ time.sleep(30)
         elapsed = time.monotonic() - t0
 
         assert result.returncode == 1, (
-            f"Expected exit code 1, got {result.returncode}. "
-            f"stderr: {result.stderr!r}"
+            f"Expected exit code 1, got {result.returncode}. stderr: {result.stderr!r}"
         )
         assert elapsed < 2.0, f"Second instance took {elapsed:.2f} s (expected < 2 s)"
         assert "already running" in result.stderr.lower(), (

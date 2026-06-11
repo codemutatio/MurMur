@@ -1,7 +1,6 @@
 """Tests for murmur.transcribe.prompt — T-7."""
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 from murmur.transcribe.prompt import build_initial_prompt
 

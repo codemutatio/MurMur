@@ -3,6 +3,7 @@
 ADR-2: read-modify-replace via os.replace for crash safety (R-9).
 The writer thread is the ONLY writer — no concurrent-writer hazard.
 """
+
 from __future__ import annotations
 
 import os

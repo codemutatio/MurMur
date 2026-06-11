@@ -1,14 +1,13 @@
 """Tests for murmur.transcribe.worker — T-9."""
+
 from __future__ import annotations
 
 import queue
 import threading
-import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
-import pytest
 
 from murmur.audio.segmenter import Segment
 from murmur.audio.spool import write_segment_wav
@@ -16,12 +15,12 @@ from murmur.control import StatusBoard
 from murmur.output.writer import TranscriptWriter
 from murmur.transcribe.base import TranscriptionError
 from murmur.transcribe.worker import TranscribeWorker
-from tests.fakes import FixedClock, FakeTranscriber, RecordingNotifier
+from tests.fakes import FakeTranscriber, FixedClock
 
 
 def _make_wav(spool_dir: Path, text: str = "speech", offset: int = 0) -> Path:
     """Write a fake WAV segment into spool_dir."""
-    start = datetime(2026, 6, 12, 9, 0, offset, tzinfo=timezone.utc)
+    start = datetime(2026, 6, 12, 9, 0, offset, tzinfo=UTC)
     samples = np.zeros(1600, dtype=np.float32) + 0.01
     seg = Segment(samples=samples, start_at=start)
     return write_segment_wav(spool_dir, seg)
@@ -40,7 +39,7 @@ def _make_worker(
     status = StatusBoard()
     backlog_drained = threading.Event()
     stop = threading.Event()
-    clock = FixedClock(datetime(2026, 6, 12, 9, 0, 0, tzinfo=timezone.utc))
+    clock = FixedClock(datetime(2026, 6, 12, 9, 0, 0, tzinfo=UTC))
     writer = TranscriptWriter(transcripts_dir, clock)
 
     worker = TranscribeWorker(
@@ -110,11 +109,13 @@ def test_fallback_off_leaves_wav_increments_error_no_api(tmp_path: Path) -> None
     wav = _make_wav(spool)
 
     # Fail on every call
-    transcriber = FakeTranscriber([
-        TranscriptionError("fail1"),
-        TranscriptionError("fail2"),
-        TranscriptionError("fail3"),
-    ])
+    transcriber = FakeTranscriber(
+        [
+            TranscriptionError("fail1"),
+            TranscriptionError("fail2"),
+            TranscriptionError("fail3"),
+        ]
+    )
     worker, _, status, _, stop = _make_worker(
         spool, transcripts, transcriber, fallback=None, max_local_failures=3, backoff_s=0.01
     )
@@ -132,11 +133,13 @@ def test_third_failure_invokes_fallback(tmp_path: Path) -> None:  # [AC-8]
     transcripts = tmp_path / "Transcripts"
     wav = _make_wav(spool)
 
-    local = FakeTranscriber([
-        TranscriptionError("fail1"),
-        TranscriptionError("fail2"),
-        TranscriptionError("fail3"),
-    ])
+    local = FakeTranscriber(
+        [
+            TranscriptionError("fail1"),
+            TranscriptionError("fail2"),
+            TranscriptionError("fail3"),
+        ]
+    )
     fallback = FakeTranscriber(["Fallback transcription"])
 
     worker, _, status, _, stop = _make_worker(
@@ -181,11 +184,13 @@ def test_api_failure_backoff(tmp_path: Path) -> None:  # [E-10]
     transcripts = tmp_path / "Transcripts"
     wav = _make_wav(spool)
 
-    local = FakeTranscriber([
-        TranscriptionError("f1"),
-        TranscriptionError("f2"),
-        TranscriptionError("f3"),
-    ])
+    local = FakeTranscriber(
+        [
+            TranscriptionError("f1"),
+            TranscriptionError("f2"),
+            TranscriptionError("f3"),
+        ]
+    )
     fallback = FakeTranscriber([TranscriptionError("api down")])
 
     worker, _, status, _, stop = _make_worker(

@@ -1,4 +1,5 @@
 """Tests for scripts/bakeoff.py — T-10."""
+
 from __future__ import annotations
 
 import subprocess
@@ -15,30 +16,42 @@ from murmur.transcribe.base import SegmentScore, TranscriptionResult
 def _fake_transcription(text: str) -> TranscriptionResult:
     return TranscriptionResult(
         text=text,
-        segments=(SegmentScore(text=text, no_speech_prob=0.0, compression_ratio=1.0, avg_logprob=-0.3),),
+        segments=(
+            SegmentScore(text=text, no_speech_prob=0.0, compression_ratio=1.0, avg_logprob=-0.3),
+        ),
     )
 
 
 def _run_bakeoff(tmp_path: Path, wav_path: Path, extra_env: dict | None = None) -> tuple[int, str]:
     """Run bakeoff.py as a subprocess with --input."""
     import os
+
     env = dict(os.environ)
     env["MURMUR_HOME"] = str(tmp_path / "murmur_home")
     if extra_env:
         env.update(extra_env)
     result = subprocess.run(
-        [sys.executable, "scripts/bakeoff.py", "--input", str(wav_path),
-         "--output", str(tmp_path / "out.md")],
+        [
+            sys.executable,
+            "scripts/bakeoff.py",
+            "--input",
+            str(wav_path),
+            "--output",
+            str(tmp_path / "out.md"),
+        ],
         capture_output=True,
         text=True,
         env=env,
     )
-    return result.returncode, (tmp_path / "out.md").read_text(encoding="utf-8") if (tmp_path / "out.md").exists() else ""
+    return result.returncode, (tmp_path / "out.md").read_text(encoding="utf-8") if (
+        tmp_path / "out.md"
+    ).exists() else ""
 
 
 def _make_wav(path: Path, duration_s: float = 0.5) -> Path:
     """Create a minimal 16 kHz mono WAV file."""
     import wave
+
     samples = np.zeros(int(duration_s * 16000), dtype=np.float32)
     pcm = (samples * 32767).astype("int16")
     with wave.open(str(path), "wb") as wf:
@@ -56,9 +69,6 @@ def test_four_sections_with_fakes(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     fake_result = _fake_transcription("hello world")
 
     # Patch the transcribers
-    import murmur.transcribe.models as models_mod
-    import murmur.transcribe.local as local_mod
-    import murmur.transcribe.api as api_mod
 
     mock_manager = MagicMock()
     mock_manager.ensure.return_value = "fake-model"
@@ -75,23 +85,21 @@ def test_four_sections_with_fakes(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr("murmur.mac.keychain.get_openai_api_key", lambda *a, **kw: "sk-fake")
 
     # Run via subprocess (tests the script is importable and runnable)
-    import os
-    from murmur.audio.spool import load_wav
-
     # Do in-process test instead since we're mocking
-    import importlib.util, types
+    import importlib.util
 
     spec = importlib.util.spec_from_file_location("bakeoff", "scripts/bakeoff.py")
     assert spec is not None
     mod = importlib.util.module_from_spec(spec)
 
     # Patch ModelManager in the script's namespace
-    with patch("murmur.transcribe.models.ModelManager") as mm_mock, \
-         patch("murmur.transcribe.local.MlxWhisperTranscriber") as local_mock, \
-         patch("murmur.transcribe.local.assert_apple_silicon"), \
-         patch("murmur.transcribe.api.OpenAITranscriber") as api_mock, \
-         patch("murmur.mac.keychain.get_openai_api_key", return_value="sk-fake"):
-
+    with (
+        patch("murmur.transcribe.models.ModelManager") as mm_mock,
+        patch("murmur.transcribe.local.MlxWhisperTranscriber") as local_mock,
+        patch("murmur.transcribe.local.assert_apple_silicon"),
+        patch("murmur.transcribe.api.OpenAITranscriber") as api_mock,
+        patch("murmur.mac.keychain.get_openai_api_key", return_value="sk-fake"),
+    ):
         mm_mock.return_value.ensure.return_value = "fake-model"
         local_instance = MagicMock()
         local_instance.transcribe.return_value = fake_result
@@ -136,11 +144,12 @@ def test_missing_key_sections_marked_skipped(tmp_path: Path) -> None:
     assert spec is not None
     mod = importlib.util.module_from_spec(spec)
 
-    with patch("murmur.transcribe.models.ModelManager") as mm_mock, \
-         patch("murmur.transcribe.local.MlxWhisperTranscriber") as local_mock, \
-         patch("murmur.transcribe.local.assert_apple_silicon"), \
-         patch("murmur.mac.keychain.get_openai_api_key", return_value=None):
-
+    with (
+        patch("murmur.transcribe.models.ModelManager") as mm_mock,
+        patch("murmur.transcribe.local.MlxWhisperTranscriber") as local_mock,
+        patch("murmur.transcribe.local.assert_apple_silicon"),
+        patch("murmur.mac.keychain.get_openai_api_key", return_value=None),
+    ):
         mm_mock.return_value.ensure.return_value = "fake-model"
         local_instance = MagicMock()
         local_instance.transcribe.return_value = fake_result

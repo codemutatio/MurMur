@@ -8,6 +8,7 @@ OQ-2 approved semantics:
 
 Survivors are joined with " ". Returns None when nothing survives (AC-3, E-7, E-8).
 """
+
 from __future__ import annotations
 
 from murmur.transcribe.base import TranscriptionResult

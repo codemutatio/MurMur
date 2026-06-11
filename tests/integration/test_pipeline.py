@@ -1,21 +1,20 @@
 """End-to-end pipeline integration tests — T-16, AC-4, AC-5, AC-16, R-16."""
+
 from __future__ import annotations
 
 import queue
 import threading
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from murmur.audio import FRAME_SAMPLES, SAMPLE_RATE, PRE_ROLL_S, POST_ROLL_S
+from murmur.audio import FRAME_SAMPLES, POST_ROLL_S, PRE_ROLL_S, SAMPLE_RATE
 from murmur.audio.engine import CaptureEngine
-from murmur.audio.segmenter import Segmenter, SegmenterConfig
+from murmur.audio.segmenter import Segment, Segmenter, SegmenterConfig
 from murmur.audio.spool import write_segment_wav
-from murmur.audio.segmenter import Segment
-from murmur.control import Controller, PauseState, PauseMode, StateStore, StatusBoard
+from murmur.control import Controller, StateStore, StatusBoard
 from murmur.output.writer import TranscriptWriter
 from murmur.transcribe.worker import TranscribeWorker
 from tests.fakes import (
@@ -27,7 +26,6 @@ from tests.fakes import (
     FixedClock,
     RecordingNotifier,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -68,7 +66,7 @@ def _make_runtime_components(
     transcripts = tmp_path / "Transcripts"
     transcripts.mkdir(parents=True, exist_ok=True)
 
-    clock = FixedClock(clock_dt or datetime(2026, 6, 12, 9, 30, 0, tzinfo=timezone.utc))
+    clock = FixedClock(clock_dt or datetime(2026, 6, 12, 9, 30, 0, tzinfo=UTC))
     notifier = RecordingNotifier()
     status = StatusBoard()
     store = StateStore(tmp_path / "state.json", clock)
@@ -167,22 +165,27 @@ def test_speech_to_transcript_end_to_end(tmp_path: Path) -> None:  # [AC-4, AC-1
     # 3 s of speech followed by 2 s of silence (enough to close the segment)
     speech_count = int(3.0 * SAMPLE_RATE / FRAME_SAMPLES)
     silence_count = int(2.0 * SAMPLE_RATE / FRAME_SAMPLES)
-    frames: list[np.ndarray | None] = (
-        [_speech_frame()] * speech_count + [_silence_frame()] * silence_count
-    )
+    frames: list[np.ndarray | None] = [_speech_frame()] * speech_count + [
+        _silence_frame()
+    ] * silence_count
 
-    (source, segmenter, worker, writer, status, controller,
-     stop, backlog_drained, work_q) = _make_runtime_components(
-        tmp_path, frames=frames, transcription="hello world"
+    (source, segmenter, worker, writer, status, controller, stop, backlog_drained, work_q) = (
+        _make_runtime_components(tmp_path, frames=frames, transcription="hello world")
     )
 
     _run_pipeline(
-        source, segmenter, worker, status, controller,
-        stop, backlog_drained, work_q, tmp_path,
+        source,
+        segmenter,
+        worker,
+        status,
+        controller,
+        stop,
+        backlog_drained,
+        work_q,
+        tmp_path,
     )
 
     # Check transcript was created
-    from datetime import date
     # writer uses clock = 2026-06-12
     transcript = tmp_path / "Transcripts" / "2026-06-12.md"
     assert transcript.exists(), "Transcript file should have been created"
@@ -190,6 +193,7 @@ def test_speech_to_transcript_end_to_end(tmp_path: Path) -> None:  # [AC-4, AC-1
     assert "hello world" in content, f"Expected transcript text in {content!r}"
     # AC-4: format check
     import re
+
     assert re.search(r"\*\*\[\d{2}:\d{2}\]\*\*", content), (
         f"Expected **[HH:MM]** format in {content!r}"
     )
@@ -199,14 +203,20 @@ def test_silent_day_no_file(tmp_path: Path) -> None:  # [AC-5]
     """All-silence stream produces no transcript file."""
     frames: list[np.ndarray | None] = [_silence_frame()] * 200
 
-    (source, segmenter, worker, writer, status, controller,
-     stop, backlog_drained, work_q) = _make_runtime_components(
-        tmp_path, frames=frames
+    (source, segmenter, worker, writer, status, controller, stop, backlog_drained, work_q) = (
+        _make_runtime_components(tmp_path, frames=frames)
     )
 
     _run_pipeline(
-        source, segmenter, worker, status, controller,
-        stop, backlog_drained, work_q, tmp_path,
+        source,
+        segmenter,
+        worker,
+        status,
+        controller,
+        stop,
+        backlog_drained,
+        work_q,
+        tmp_path,
     )
 
     transcript = tmp_path / "Transcripts" / "2026-06-12.md"
@@ -217,20 +227,22 @@ def test_starts_paused_from_state(tmp_path: Path) -> None:  # [AC-16]
     """App starts paused when state.json contains a REST_OF_DAY pause that is still active."""
     import json
 
-    clock = FixedClock(datetime(2026, 6, 12, 9, 30, 0, tzinfo=timezone.utc))
+    clock = FixedClock(datetime(2026, 6, 12, 9, 30, 0, tzinfo=UTC))
     # Set until = midnight of 2026-06-13 (well in the future from our clock)
-    local_midnight = datetime(2026, 6, 13, 0, 0, 0, tzinfo=timezone.utc)
+    local_midnight = datetime(2026, 6, 13, 0, 0, 0, tzinfo=UTC)
 
     state_path = tmp_path / "state.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(
-        json.dumps({
-            "version": 1,
-            "pause": {
-                "mode": "rest_of_day",
-                "until": local_midnight.isoformat(),
+        json.dumps(
+            {
+                "version": 1,
+                "pause": {
+                    "mode": "rest_of_day",
+                    "until": local_midnight.isoformat(),
+                },
             }
-        })
+        )
     )
 
     store = StateStore(state_path, clock)
@@ -258,10 +270,13 @@ def test_backlog_drained_before_capture(tmp_path: Path) -> None:  # [R-16]
     writer = TranscriptWriter(transcripts, clock)
 
     # Write one pre-existing spool file
-    wav_path = write_segment_wav(spool, Segment(
-        samples=np.zeros(1600, dtype=np.float32),
-        start_at=datetime(2026, 6, 12, 8, 0, 0, tzinfo=timezone.utc),
-    ))
+    wav_path = write_segment_wav(
+        spool,
+        Segment(
+            samples=np.zeros(1600, dtype=np.float32),
+            start_at=datetime(2026, 6, 12, 8, 0, 0, tzinfo=UTC),
+        ),
+    )
     assert wav_path.exists()
 
     transcriber = FakeTranscriber(["pre-existing"])

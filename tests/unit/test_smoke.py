@@ -1,4 +1,5 @@
 """Smoke tests for T-1: project scaffold, imports, and entry-point. — T-1"""
+
 from __future__ import annotations
 
 import subprocess

@@ -1,11 +1,10 @@
 """Tests for murmur.config — T-2."""
+
 from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
-from murmur.config import CaptureConfig, Config, SttConfig, load_config
+from murmur.config import CaptureConfig, Config, load_config
 
 
 def _write_toml(path: Path, content: str) -> Path:
