@@ -32,7 +32,6 @@ from murmur.transcribe.base import SegmentScore, TranscriptionError, Transcripti
 from murmur.transcribe.guard import clean_result
 from tests.fakes import AmplitudeVAD, FixedClock, RecordingNotifier
 
-
 # ---------------------------------------------------------------------------
 # AC-19 completeness: icon AND resume notification [test-engineer]
 # ---------------------------------------------------------------------------
@@ -294,8 +293,8 @@ def test_fallback_not_called_before_third_failure(tmp_path: Path) -> None:  # [t
     """
     import queue
 
-    from murmur.audio.spool import write_segment_wav
     from murmur.audio.segmenter import Segment
+    from murmur.audio.spool import write_segment_wav
     from murmur.transcribe.worker import TranscribeWorker
 
     spool = tmp_path / "spool"
@@ -369,8 +368,8 @@ def test_empty_transcription_no_file_no_error(tmp_path: Path) -> None:  # [test-
     """
     import queue
 
-    from murmur.audio.spool import write_segment_wav
     from murmur.audio.segmenter import Segment
+    from murmur.audio.spool import write_segment_wav
     from murmur.transcribe.worker import TranscribeWorker
 
     spool = tmp_path / "spool"
@@ -416,7 +415,9 @@ def test_empty_transcription_no_file_no_error(tmp_path: Path) -> None:  # [test-
     assert status.snapshot().error_count == 0, (
         "Empty transcription (guard drop) must NOT increment error count"
     )
-    assert not wav.exists(), "WAV must be deleted even when guard drops the result (keep_audio=False)"
+    assert not wav.exists(), (
+        "WAV must be deleted even when guard drops the result (keep_audio=False)"
+    )
     transcript = transcripts / "2026-06-12.md"
     assert not transcript.exists(), "No transcript file should be created for empty transcription"
 
@@ -530,7 +531,9 @@ def test_segmenter_flush_idle_is_none_after_reset() -> None:  # [test-engineer]
 # ---------------------------------------------------------------------------
 
 
-def test_writer_no_tmp_leak_on_fsync_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:  # [test-engineer, R-9]
+def test_writer_no_tmp_leak_on_fsync_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:  # [test-engineer, R-9]
     """If os.fsync raises during write, no .tmp file is left visible (ADR-2 crash safety)."""
     import os as _os
 
@@ -561,7 +564,9 @@ def test_writer_no_tmp_leak_on_fsync_error(tmp_path: Path, monkeypatch: pytest.M
 # ---------------------------------------------------------------------------
 
 
-def test_pause_rest_of_day_sets_until_to_next_midnight(tmp_path: Path) -> None:  # [test-engineer, R-14]
+def test_pause_rest_of_day_sets_until_to_next_midnight(
+    tmp_path: Path,
+) -> None:  # [test-engineer, R-14]
     """pause_rest_of_day() always computes until = the START of the next calendar day.
 
     The plan says: "REST_OF_DAY stores until = next local midnight at set time".
