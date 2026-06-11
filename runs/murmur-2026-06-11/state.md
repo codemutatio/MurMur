@@ -7,9 +7,9 @@ PRD provided verbatim at `runs/murmur-2026-06-11/prd.md` — "Murmur": Personal 
 
 ## Current
 **Pipeline:** delivery
-**Stage:** IMPLEMENT
+**Stage:** VALIDATE
 **Status:** running
-**Iteration counters:** validation iteration 0
+**Iteration counters:** validation iteration 1
 
 ## Size
 **L** — greenfield application (new repo), multiple new dependencies (mlx-whisper, silero-vad, sounddevice, rumps, pynput), always-on microphone capture is a privacy-sensitive surface, multi-component system (capture/VAD/transcription/UI/daemon).
@@ -27,6 +27,8 @@ PRD provided verbatim at `runs/murmur-2026-06-11/prd.md` — "Murmur": Personal 
 | 2026-06-11T23:54:00+0300 | architect completed: plan.md (20 tasks, all 30 ACs mapped, AC→test table), adr.md (2 ADRs) |
 | 2026-06-11T23:56:00+0300 | Plan gate PASSED (all DoD § Plan boxes). Stage → CHECKPOINT, awaiting human approval |
 | 2026-06-12T00:05:07+0300 | CHECKPOINT APPROVED by user: approve + all recommended OQ defaults + corrected OQ-2 guard semantics + KeepAlive=false. Size confirmed L. Stage → IMPLEMENT |
+| 2026-06-12T01:13:58+0300 | implementer completed T-1..T-20, 24 commits. Orchestrator verified: 203 passed + 1 xfail, cov 84.07%, ruff+mypy green, no TODO/secrets. 5 deviations flagged (notes #3: AC-29 launchctl test xfailed — surfaced to validators). Implement gate PASSED. Stage → VALIDATE iter 1 |
+| 2026-06-12T01:28:57+0300 | VALIDATE iter 1 verdicts: test-engineer FAIL (1 blocker, 3 majors, 4 minors; AC-29 ruled verified-minor), code-reviewer FAIL (5 majors, 8 minors), security PASS (5 minors). Merged report written; fix-list-1.md compiled: F-1..F-8 (1 blocker, 7 majors, deduplicated). Implementer relaunched |
 
 ## Checkpoint Record
 **Approved:** 2026-06-12T00:05:07+0300 (user selected "Approve", size stays L) · **Edits requested:** none
