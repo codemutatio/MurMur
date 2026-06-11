@@ -15,27 +15,24 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from murmur.audio import DISK_MIN_FREE_BYTES, FRAME_SAMPLES, SAMPLE_RATE
+from murmur.audio import FRAME_SAMPLES, SAMPLE_RATE
 from murmur.audio.segmenter import Segment, Segmenter, SegmenterConfig
-from murmur.audio.spool import list_spool, parse_segment_start, write_segment_wav
-from murmur.control import Controller, IconState, StateStore, StatusBoard
+from murmur.audio.spool import list_spool, write_segment_wav
+from murmur.control import Controller, StateStore, StatusBoard
 from murmur.output.retention import prune_transcripts
 from murmur.output.writer import TranscriptWriter
-from murmur.transcribe.base import TranscriptionError, TranscriptionResult
+from murmur.transcribe.base import TranscriptionResult
 from murmur.transcribe.guard import clean_result
 from murmur.transcribe.worker import TranscribeWorker
 from tests.fakes import (
     AmplitudeVAD,
-    FakeAudioSource,
     FakeDiskFree,
     FakePermission,
     FakeTranscriber,
     FixedClock,
     RecordingNotifier,
 )
-
 
 # ---------------------------------------------------------------------------
 # F-5: outer guard in engine — source.read() raising unexpectedly [test-engineer] [iter-2]
@@ -130,7 +127,9 @@ def test_capture_engine_survives_read_exception(tmp_path: Path) -> None:  # [tes
 # ---------------------------------------------------------------------------
 
 
-def test_bad_filename_wav_persists_and_is_reskipped_on_rerun(tmp_path: Path) -> None:  # [test-engineer, iter-2]
+def test_bad_filename_wav_persists_and_is_reskipped_on_rerun(
+    tmp_path: Path,
+) -> None:  # [test-engineer, iter-2]
     """Bad-filename WAV in spool is not deleted and is re-skipped on next worker run.
 
     The F-4 fix skips bad filenames with a logged warning and returns from _process()
@@ -224,7 +223,9 @@ def test_bad_filename_wav_persists_and_is_reskipped_on_rerun(tmp_path: Path) -> 
 # ---------------------------------------------------------------------------
 
 
-def test_f8_dropped_wav_recoverable_by_list_spool(tmp_path: Path) -> None:  # [test-engineer, iter-2]
+def test_f8_dropped_wav_recoverable_by_list_spool(
+    tmp_path: Path,
+) -> None:  # [test-engineer, iter-2]
     """WAV file dropped from the in-process queue due to queue.Full remains on disk
     and is found by list_spool(), which is what the startup scan uses on next launch.
 
@@ -317,7 +318,9 @@ def test_writer_naive_datetime_uses_local_time(tmp_path: Path) -> None:  # [test
 # ---------------------------------------------------------------------------
 
 
-def test_force_split_part1_never_exceeds_max_segment(tmp_path: Path) -> None:  # [test-engineer, iter-2]
+def test_force_split_part1_never_exceeds_max_segment(
+    tmp_path: Path,
+) -> None:  # [test-engineer, iter-2]
     """Part 1 of a force-split on non-uniform input stays within max_segment_s.
 
     F-7 fixed argmin lower-bound. Verify the upper-bound: the split must also
@@ -366,14 +369,15 @@ def test_force_split_part1_never_exceeds_max_segment(tmp_path: Path) -> None:  #
 # ---------------------------------------------------------------------------
 
 
-def test_guard_no_speech_below_threshold_not_dropped(tmp_path: Path) -> None:  # [test-engineer, iter-2, AC-3]
+def test_guard_no_speech_below_threshold_not_dropped(
+    tmp_path: Path,
+) -> None:  # [test-engineer, iter-2, AC-3]
     """Segment with no_speech_prob just BELOW 0.6 must NOT be dropped.
 
     Mutation: if the guard used >= instead of >, a segment at exactly 0.6 would
     be dropped incorrectly.  This test ensures segments below the threshold pass.
     """
-    from murmur.transcribe.base import SegmentScore, TranscriptionResult
-    from murmur.transcribe.guard import clean_result
+    from murmur.transcribe.base import SegmentScore
 
     r = TranscriptionResult(
         text="legitimate speech",
