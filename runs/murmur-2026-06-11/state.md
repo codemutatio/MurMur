@@ -7,9 +7,9 @@ PRD provided verbatim at `runs/murmur-2026-06-11/prd.md` — "Murmur": Personal 
 
 ## Current
 **Pipeline:** delivery
-**Stage:** VALIDATE
+**Stage:** DOCUMENT
 **Status:** running
-**Iteration counters:** validation iteration 1
+**Iteration counters:** validation iteration 2
 
 ## Size
 **L** — greenfield application (new repo), multiple new dependencies (mlx-whisper, silero-vad, sounddevice, rumps, pynput), always-on microphone capture is a privacy-sensitive surface, multi-component system (capture/VAD/transcription/UI/daemon).
@@ -29,6 +29,8 @@ PRD provided verbatim at `runs/murmur-2026-06-11/prd.md` — "Murmur": Personal 
 | 2026-06-12T00:05:07+0300 | CHECKPOINT APPROVED by user: approve + all recommended OQ defaults + corrected OQ-2 guard semantics + KeepAlive=false. Size confirmed L. Stage → IMPLEMENT |
 | 2026-06-12T01:13:58+0300 | implementer completed T-1..T-20, 24 commits. Orchestrator verified: 203 passed + 1 xfail, cov 84.07%, ruff+mypy green, no TODO/secrets. 5 deviations flagged (notes #3: AC-29 launchctl test xfailed — surfaced to validators). Implement gate PASSED. Stage → VALIDATE iter 1 |
 | 2026-06-12T01:28:57+0300 | VALIDATE iter 1 verdicts: test-engineer FAIL (1 blocker, 3 majors, 4 minors; AC-29 ruled verified-minor), code-reviewer FAIL (5 majors, 8 minors), security PASS (5 minors). Merged report written; fix-list-1.md compiled: F-1..F-8 (1 blocker, 7 majors, deduplicated). Implementer relaunched |
+| 2026-06-12T01:44:11+0300 | implementer fixed F-1..F-8 (no disputes; F-8 resolved by bounding work_q to 256 + put_nowait drop path). Orchestrator verified: 225 passed + 1 xfail, cov 84.72%, ruff+mypy green. → VALIDATE iter 2: TE + CR full re-run, security scoped diff re-check |
+| 2026-06-12T01:56:17+0300 | VALIDATE iter 2 verdicts: TE PASS, CR PASS, SEC PASS — zero blockers/majors. 21/21 AUTO ACs verified, 9/9 MANUAL procedures audited, cov 84.72%, 233 passed + 1 xfail. 24 minors logged total. Validate gate PASSED (2 of 3 iterations). Stage → DOCUMENT |
 
 ## Checkpoint Record
 **Approved:** 2026-06-12T00:05:07+0300 (user selected "Approve", size stays L) · **Edits requested:** none
