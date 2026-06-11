@@ -41,14 +41,26 @@ These procedures cover the [MANUAL] acceptance criteria (AC-20 through AC-28). E
 
 ### Procedure
 
-1. Obtain or record a 60-minute mono WAV at 16 kHz (use the bake-off recording or loop a representative sample):
+1. Obtain a 60-minute mono WAV at 16 kHz. Record it directly with sounddevice:
    ```sh
-   # Loop a 10-minute recording to 60 min (requires sox or similar; or use bakeoff.py to record)
-   uv run python scripts/bakeoff.py --duration 3600 --output bakeoff-60min.wav
+   uv run python3 -c "
+   import sounddevice as sd, wave
+   print('Recording 60 min — speak naturally...')
+   audio = sd.rec(60*60*16000, samplerate=16000, channels=1, dtype='int16')
+   sd.wait()
+   with wave.open('/tmp/bench-60min.wav', 'wb') as w:
+       w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+       w.writeframes(audio.tobytes())
+   print('Done: /tmp/bench-60min.wav')
+   "
    ```
+   Alternatively, loop a representative 10-minute segment six times using `sox` or any audio tool to produce a 60-minute file.
+
+   Note: `bakeoff.py` transcribes audio in memory and does not save the recorded WAV to disk. It is not usable for this step.
+
 2. Run the bench command:
    ```sh
-   uv run murmur bench /path/to/60min.wav
+   uv run murmur bench /tmp/bench-60min.wav
    ```
 3. Observe the printed output.
 
