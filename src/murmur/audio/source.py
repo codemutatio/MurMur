@@ -40,15 +40,14 @@ class SounddeviceSource:
     Notes:
         - open() calls sd._terminate() + sd._initialize() before opening the stream
           because PortAudio caches its device list at init time (Risk 3 in plan).
-        - The PortAudio callback does exactly one thing: put_nowait into frames_q.
-          Full queue → dropped_frames counter increment, no other side effects.
+        - ADR-1: the PortAudio callback does exactly one thing — put_nowait into
+          frames_q.  It touches no instance state (F-6: callback ownership rule).
         - Thread affinity: constructed and used only on the capture-engine thread.
     """
 
     def __init__(self) -> None:
         self._stream: Any = None
         self._frames_q: queue.Queue[np.ndarray] = queue.Queue(maxsize=100)
-        self._dropped_frames: int = 0
         self._lock = threading.Lock()
 
     def open(self, device: str) -> None:
@@ -63,16 +62,20 @@ class SounddeviceSource:
 
         frames_q = self._frames_q
 
+        # ADR-1: the PortAudio callback does exactly one thing — put_nowait.
+        # It must not touch any instance state (including counters) because it
+        # runs on a C-thread owned by PortAudio, not the capture-engine thread.
+        # A drop counter transferred here would violate the ownership rule (F-6).
         def _callback(
             indata: np.ndarray,
             frames: int,  # noqa: ARG001
             time: object,  # noqa: ARG001
             status: object,  # noqa: ARG001
         ) -> None:
-            try:
+            import contextlib
+
+            with contextlib.suppress(queue.Full):
                 frames_q.put_nowait(indata.copy().reshape(-1))
-            except queue.Full:
-                self._dropped_frames += 1
 
         dev = None if device == "default" else device
         try:
@@ -114,7 +117,3 @@ class SounddeviceSource:
             return str(info.get("name", "")) if isinstance(info, dict) else ""
         except Exception:
             return ""
-
-    @property
-    def dropped_frames(self) -> int:
-        return self._dropped_frames
