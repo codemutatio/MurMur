@@ -12,8 +12,10 @@ Startup sequence:
 Stop sequence (stop()):
   flush partial segment → stop events → join threads → release resources
 """
+
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import queue
@@ -22,19 +24,18 @@ import threading
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
-from murmur.audio import PRE_ROLL_S, POST_ROLL_S, SAMPLE_RATE, FRAME_SAMPLES
+from murmur.audio import POST_ROLL_S, PRE_ROLL_S
 from murmur.audio.segmenter import Segmenter, SegmenterConfig
-from murmur.audio.spool import list_spool
 from murmur.config import Config
-from murmur.control import Controller, IconState, StateStore, StatusBoard
+from murmur.control import Controller, StateStore, StatusBoard
 from murmur.mac.notify import Notifier, OsascriptNotifier
 from murmur.mac.permissions import PermissionStatus, microphone_permission
 from murmur.output.retention import prune_transcripts
 from murmur.output.writer import TranscriptWriter
 from murmur.paths import AppPaths
 from murmur.transcribe.base import Transcriber
-from murmur.transcribe.guard import clean_result
 from murmur.transcribe.prompt import build_initial_prompt
 from murmur.transcribe.worker import TranscribeWorker
 
@@ -62,15 +63,15 @@ class Runtime:
         config: Config,
         paths: AppPaths,
         *,
-        source: object | None = None,
-        vad: object | None = None,
+        source: Any | None = None,
+        vad: Any | None = None,
         transcriber: Transcriber | None = None,
         fallback: Transcriber | None = None,
         notifier: Notifier | None = None,
         now: Callable[[], datetime] = _local_now,
         disk_free: Callable[[], int] | None = None,
         mic_permission: Callable[[], PermissionStatus] | None = None,
-        model_manager: object | None = None,
+        model_manager: Any | None = None,
     ) -> None:
         self._config = config
         self._paths = paths
@@ -96,9 +97,9 @@ class Runtime:
         self._fallback = fallback
         self._model_manager = model_manager
 
-        self._capture_engine: object | None = None
+        self._capture_engine: Any = None
         self._worker: TranscribeWorker | None = None
-        self._hotkey_listener: object | None = None
+        self._hotkey_listener: Any = None
 
     def start(self) -> None:
         """Start all threads per the startup sequence."""
@@ -160,7 +161,7 @@ class Runtime:
             pre_roll_s=PRE_ROLL_S,
             post_roll_s=POST_ROLL_S,
         )
-        segmenter = Segmenter(seg_cfg, vad, self._now)  # type: ignore[arg-type]
+        segmenter = Segmenter(seg_cfg, vad, self._now)
 
         source = self._source
         if source is None:
@@ -171,7 +172,7 @@ class Runtime:
         from murmur.audio.engine import CaptureEngine
 
         self._capture_engine = CaptureEngine(
-            source=source,  # type: ignore[arg-type]
+            source=source,
             segmenter=segmenter,
             spool_dir=cfg.storage.spool_dir,
             work_q=self._work_q,
@@ -185,7 +186,7 @@ class Runtime:
             stop=self._stop_event,
             device=cfg.capture.device,
         )
-        self._capture_engine.start()  # type: ignore[union-attr]
+        self._capture_engine.start()
         _log.info("CaptureEngine started")
 
         # Start hotkey listener
@@ -213,22 +214,16 @@ class Runtime:
         self._stop_event.set()
 
         if self._hotkey_listener is not None:
-            try:
-                self._hotkey_listener.stop()  # type: ignore[union-attr]
-            except Exception:
-                pass
+            with contextlib.suppress(Exception):
+                self._hotkey_listener.stop()
 
         if self._capture_engine is not None:
-            try:
-                self._capture_engine.join(timeout=timeout)  # type: ignore[union-attr]
-            except Exception:
-                pass
+            with contextlib.suppress(Exception):
+                self._capture_engine.join(timeout=timeout)
 
         if self._worker is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._worker.join(timeout=timeout)
-            except Exception:
-                pass
 
         _log.info("Runtime stopped")
 
@@ -259,7 +254,7 @@ class Runtime:
             manager = ModelManager(
                 progress=lambda done, total: self.status.set_download(done, total),
             )
-        model_ref = manager.ensure(self._config.stt.local_model)  # type: ignore[union-attr]
+        model_ref = manager.ensure(self._config.stt.local_model)
         self.status.clear_download()
         return MlxWhisperTranscriber(model_ref)
 

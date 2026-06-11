@@ -1,4 +1,5 @@
 """Tests for murmur.output.retention — T-5."""
+
 from __future__ import annotations
 
 from datetime import date
@@ -48,8 +49,6 @@ def test_skips_locked_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     """OSError on deletion → logged + skipped, no crash."""
     today = date(2026, 6, 12)
     _touch(tmp_path, "2026-06-04.md")  # 8 days ago
-
-    original_unlink = Path.unlink
 
     def failing_unlink(self: Path, missing_ok: bool = False) -> None:
         raise OSError("file busy")

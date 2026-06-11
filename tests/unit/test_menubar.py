@@ -1,9 +1,10 @@
 """Tests for app/menubar.py menu structure — T-17, R-11, R-12."""
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -36,12 +37,12 @@ def mock_rumps(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     # Build a Timer mock whose instances have a proper .start() method
     timer_instance = MagicMock()
     timer_instance.start = MagicMock()
-    TimerClass = MagicMock(return_value=timer_instance)
+    timer_cls = MagicMock(return_value=timer_instance)
 
     rumps_mock = MagicMock()
     rumps_mock.App = MagicMock
     rumps_mock.MenuItem = MagicMock
-    rumps_mock.Timer = TimerClass
+    rumps_mock.Timer = timer_cls
     rumps_mock.separator = "---"
     rumps_mock.quit_application = MagicMock()
     monkeypatch.setitem(sys.modules, "rumps", rumps_mock)
@@ -66,9 +67,7 @@ def _make_app(
     return MurmurApp(controller, status, runtime, tmp_path / "Transcripts"), status
 
 
-def test_menu_items_and_disabled_notes(
-    tmp_path: Path, mock_rumps: MagicMock
-) -> None:  # [R-12]
+def test_menu_items_and_disabled_notes(tmp_path: Path, mock_rumps: MagicMock) -> None:  # [R-12]
     """MurmurApp creates all R-12 menu items including a disabled notes item.
 
     The notes item must have callback=None (renders as disabled in rumps).
@@ -90,9 +89,7 @@ def test_menu_items_and_disabled_notes(
     assert app._item_notes in app.menu
 
 
-def test_icon_reflects_snapshot(
-    tmp_path: Path, mock_rumps: MagicMock
-) -> None:  # [R-11]
+def test_icon_reflects_snapshot(tmp_path: Path, mock_rumps: MagicMock) -> None:  # [R-11]
     """Timer callback sets app title to snapshot.icon.value."""
     app, status = _make_app(tmp_path, mock_rumps)
 
@@ -109,9 +106,7 @@ def test_icon_reflects_snapshot(
     assert app.title == IconState.ERROR.value
 
 
-def test_pause_resume_label_flips(
-    tmp_path: Path, mock_rumps: MagicMock
-) -> None:
+def test_pause_resume_label_flips(tmp_path: Path, mock_rumps: MagicMock) -> None:
     """Pause/Resume label flips based on icon state from status board."""
     app, status = _make_app(tmp_path, mock_rumps)
 

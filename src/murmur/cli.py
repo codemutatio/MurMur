@@ -8,6 +8,7 @@ Commands:
   murmur install-agent
   murmur uninstall-agent
 """
+
 from __future__ import annotations
 
 import argparse
@@ -170,8 +171,6 @@ def _cmd_copy(args: argparse.Namespace) -> int:
 def _cmd_bench(args: argparse.Namespace) -> int:
     import os
     import time
-
-    import numpy as np
 
     from murmur.audio.spool import load_wav
     from murmur.config import load_config

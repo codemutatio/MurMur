@@ -5,13 +5,14 @@ unparseable → all defaults + logged warning (E-16). Unknown keys → logged
 warning, not error (E-17). Type errors on known keys → use default + warn.
 API keys are NEVER stored in config — see murmur.mac.keychain.
 """
+
 from __future__ import annotations
 
 import logging
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 _log = logging.getLogger(__name__)
 
@@ -55,12 +56,8 @@ class SttConfig:
 
 @dataclass(frozen=True)
 class StorageConfig:
-    transcripts_dir: Path = field(
-        default_factory=lambda: Path("~/Transcripts").expanduser()
-    )
-    spool_dir: Path = field(
-        default_factory=lambda: Path("~/Transcripts/spool").expanduser()
-    )
+    transcripts_dir: Path = field(default_factory=lambda: Path("~/Transcripts").expanduser())
+    spool_dir: Path = field(default_factory=lambda: Path("~/Transcripts/spool").expanduser())
     keep_audio: bool = False
     retention_days: int = 365
 
@@ -98,9 +95,7 @@ def load_config(path: Path | None) -> tuple[Config, list[str]]:
 
     if path is None or not path.exists():
         expected = path or Path("~/Library/Application Support/Murmur/config.toml").expanduser()
-        warnings.append(
-            f"Config file not found at {expected}; using all defaults."
-        )
+        warnings.append(f"Config file not found at {expected}; using all defaults.")
         return Config(), warnings
 
     try:
@@ -126,6 +121,7 @@ def load_config(path: Path | None) -> tuple[Config, list[str]]:
 # ---------------------------------------------------------------------------
 # Section parsers
 # ---------------------------------------------------------------------------
+
 
 def _parse_capture(raw: Any, warnings: list[str]) -> CaptureConfig:
     if not isinstance(raw, dict):
@@ -162,7 +158,10 @@ def _parse_stt(raw: Any, warnings: list[str]) -> SttConfig:
         hints = d.vocab_hints
 
     engine_raw = _coerce(raw, "engine", str, d.engine, warnings)
-    engine: Literal["local", "api"] = engine_raw if engine_raw in ("local", "api") else d.engine  # type: ignore[assignment]
+    engine = cast(
+        "Literal['local', 'api']",
+        engine_raw if engine_raw in ("local", "api") else d.engine,
+    )
     if engine_raw not in ("local", "api"):
         warnings.append(f"stt.engine '{engine_raw}' invalid; using '{d.engine}'.")
 

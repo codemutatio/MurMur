@@ -1,10 +1,11 @@
 """Tests for murmur.audio.engine — T-12."""
+
 from __future__ import annotations
 
 import queue
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -13,7 +14,6 @@ import pytest
 from murmur.audio import DISK_MIN_FREE_BYTES, FRAME_SAMPLES
 from murmur.audio.engine import CaptureEngine
 from murmur.audio.segmenter import Segmenter, SegmenterConfig
-from murmur.audio.source import AudioSourceError
 from murmur.control import (
     Controller,
     IconState,
@@ -22,7 +22,6 @@ from murmur.control import (
     StateStore,
     StatusBoard,
 )
-from murmur.mac.permissions import PermissionStatus
 from tests.fakes import (
     AmplitudeVAD,
     FakeAudioSource,
@@ -48,7 +47,15 @@ def _make_engine(
     disk_values: list[int] | None = None,
     perm_values: list[str] | None = None,
     paused: bool = False,
-) -> tuple[CaptureEngine, FakeAudioSource, StatusBoard, RecordingNotifier, threading.Event, FixedClock, StateStore]:
+) -> tuple[
+    CaptureEngine,
+    FakeAudioSource,
+    StatusBoard,
+    RecordingNotifier,
+    threading.Event,
+    FixedClock,
+    StateStore,
+]:
     spool = tmp_path / "spool"
     spool.mkdir(exist_ok=True)
     work_q: queue.Queue[Path] = queue.Queue()
@@ -57,7 +64,7 @@ def _make_engine(
     backlog_drained = threading.Event()
     backlog_drained.set()  # pretend backlog is already drained
     stop = threading.Event()
-    clock = FixedClock(datetime(2026, 6, 12, 9, 0, 0, tzinfo=timezone.utc))
+    clock = FixedClock(datetime(2026, 6, 12, 9, 0, 0, tzinfo=UTC))
 
     src = source or FakeAudioSource()
     vad = AmplitudeVAD(threshold=0.01)
@@ -106,14 +113,12 @@ def test_disk_low_pauses_then_resumes_with_notifications(tmp_path: Path) -> None
     """Disk space low → capture pauses + notification; recovers → resumes + notification."""
     # Start low, then recover
     disk_values = [
-        DISK_MIN_FREE_BYTES - 1,   # first check: below threshold
-        DISK_MIN_FREE_BYTES - 1,   # second check: still below
-        DISK_MIN_FREE_BYTES + 1,   # third check: recovered
-        10 * 1024**3,              # default thereafter
+        DISK_MIN_FREE_BYTES - 1,  # first check: below threshold
+        DISK_MIN_FREE_BYTES - 1,  # second check: still below
+        DISK_MIN_FREE_BYTES + 1,  # third check: recovered
+        10 * 1024**3,  # default thereafter
     ]
-    engine, src, status, notifier, stop, _, _ = _make_engine(
-        tmp_path, disk_values=disk_values
-    )
+    engine, src, status, notifier, stop, _, _ = _make_engine(tmp_path, disk_values=disk_values)
 
     # Run for a few ticks then stop
     engine.start()
@@ -138,7 +143,6 @@ def test_device_signature_change_reopens(tmp_path: Path) -> None:  # [R-22, E-3]
     )
     engine, src, status, _, stop, _, _ = _make_engine(tmp_path, source=src)
 
-    initial_open_count = 0
     engine.start()
     # Give the engine time to do a device poll and detect signature change
     time.sleep(DEVICE_POLL_S * 2 + 0.5)
@@ -186,9 +190,7 @@ def test_open_failure_retries_5s(tmp_path: Path) -> None:  # [E-4]
 def test_mic_denied_blocks_and_recovers(tmp_path: Path) -> None:  # [E-1]
     """Mic permission denied → stream stays closed, notification fired, auto-recovers."""
     perm_values = ["DENIED", "DENIED", "GRANTED"]
-    engine, src, status, notifier, stop, _, _ = _make_engine(
-        tmp_path, perm_values=perm_values
-    )
+    engine, src, status, notifier, stop, _, _ = _make_engine(tmp_path, perm_values=perm_values)
 
     engine.start()
     time.sleep(1.5)
@@ -201,7 +203,9 @@ def test_mic_denied_blocks_and_recovers(tmp_path: Path) -> None:  # [E-1]
 
 
 # E-14
-def test_spool_oserror_drops_and_counts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:  # [E-14]
+def test_spool_oserror_drops_and_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:  # [E-14]
     """Spool write OSError → segment dropped, error count incremented."""
     speech = [_speech_frame()] * 5
     # After speech, add enough silence to close the segment

@@ -1,14 +1,11 @@
 """Tests for mac.permissions — T-17, R-18, R-19."""
+
 from __future__ import annotations
 
 import sys
-from types import ModuleType
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from murmur.mac.permissions import PermissionStatus
-
 
 # ---------------------------------------------------------------------------
 # microphone_permission
@@ -22,6 +19,7 @@ def test_microphone_granted_returns_granted() -> None:
 
     with patch.dict(sys.modules, {"AVFoundation": mock_av}):
         from importlib import reload
+
         import murmur.mac.permissions as perms
 
         reload(perms)
@@ -37,6 +35,7 @@ def test_microphone_denied_returns_denied() -> None:
 
     with patch.dict(sys.modules, {"AVFoundation": mock_av}):
         from importlib import reload
+
         import murmur.mac.permissions as perms
 
         reload(perms)
@@ -52,6 +51,7 @@ def test_microphone_restricted_returns_denied() -> None:
 
     with patch.dict(sys.modules, {"AVFoundation": mock_av}):
         from importlib import reload
+
         import murmur.mac.permissions as perms
 
         reload(perms)
@@ -67,6 +67,7 @@ def test_microphone_undetermined_returns_undetermined() -> None:
 
     with patch.dict(sys.modules, {"AVFoundation": mock_av}):
         from importlib import reload
+
         import murmur.mac.permissions as perms
 
         reload(perms)
@@ -79,6 +80,7 @@ def test_microphone_permission_import_failure_returns_undetermined() -> None:
     """Import failure for AVFoundation → UNDETERMINED (never crashes)."""
     with patch.dict(sys.modules, {"AVFoundation": None}):
         from importlib import reload
+
         import murmur.mac.permissions as perms
 
         reload(perms)
@@ -99,6 +101,7 @@ def test_accessibility_trusted_true() -> None:
 
     with patch.dict(sys.modules, {"ApplicationServices": mock_as}):
         from importlib import reload
+
         import murmur.mac.permissions as perms
 
         reload(perms)
@@ -114,6 +117,7 @@ def test_accessibility_trusted_false() -> None:
 
     with patch.dict(sys.modules, {"ApplicationServices": mock_as}):
         from importlib import reload
+
         import murmur.mac.permissions as perms
 
         reload(perms)
@@ -126,6 +130,7 @@ def test_accessibility_import_failure_returns_false() -> None:
     """Import failure for ApplicationServices → False (never crashes)."""
     with patch.dict(sys.modules, {"ApplicationServices": None}):
         from importlib import reload
+
         import murmur.mac.permissions as perms
 
         reload(perms)
@@ -139,3 +144,34 @@ def test_status_mapping() -> None:
     assert PermissionStatus.GRANTED == "GRANTED"
     assert PermissionStatus.DENIED == "DENIED"
     assert PermissionStatus.UNDETERMINED == "UNDETERMINED"
+
+
+# ---------------------------------------------------------------------------
+# request_microphone_access
+# ---------------------------------------------------------------------------
+
+
+def test_request_microphone_access_calls_avfoundation() -> None:
+    """request_microphone_access calls AVCaptureDevice request method."""
+    mock_av = MagicMock()
+
+    with patch.dict(sys.modules, {"AVFoundation": mock_av}):
+        from importlib import reload
+
+        import murmur.mac.permissions as perms
+
+        reload(perms)
+        perms.request_microphone_access()
+
+    mock_av.AVCaptureDevice.requestAccessForMediaType_completionHandler_.assert_called_once()
+
+
+def test_request_microphone_access_import_failure_does_not_raise() -> None:
+    """request_microphone_access does not raise when AVFoundation is unavailable."""
+    with patch.dict(sys.modules, {"AVFoundation": None}):
+        from importlib import reload
+
+        import murmur.mac.permissions as perms
+
+        reload(perms)
+        perms.request_microphone_access()  # Should not raise

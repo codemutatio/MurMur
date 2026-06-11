@@ -4,6 +4,7 @@ The lock file is opened and held for the lifetime of the process. flock is
 stale-safe: if the holding process dies without releasing, the lock is
 automatically released by the OS when the file descriptor is closed.
 """
+
 from __future__ import annotations
 
 import fcntl
@@ -39,11 +40,11 @@ class SingleInstanceLock:
         fd = os.open(str(self._path), os.O_CREAT | os.O_RDWR, 0o600)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
+        except BlockingIOError as exc:
             # Another process holds the lock — read its PID
             pid = self._read_pid(fd)
             os.close(fd)
-            raise AlreadyRunningError(pid)
+            raise AlreadyRunningError(pid) from exc
         # Write our PID to the file
         os.ftruncate(fd, 0)
         os.lseek(fd, 0, os.SEEK_SET)

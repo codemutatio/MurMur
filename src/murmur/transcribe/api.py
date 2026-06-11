@@ -1,4 +1,5 @@
 """OpenAI API transcriber for the api_fallback path (R-7)."""
+
 from __future__ import annotations
 
 import io
@@ -43,7 +44,7 @@ class OpenAITranscriber:
         client_factory: Callable[..., Any] | None = None,
     ) -> None:
         if client_factory is None:
-            from openai import OpenAI  # type: ignore[import-untyped]
+            from openai import OpenAI
 
             client_factory = OpenAI
 

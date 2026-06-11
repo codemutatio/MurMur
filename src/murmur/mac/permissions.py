@@ -1,4 +1,5 @@
 """macOS permission probes: microphone (AVFoundation) and Accessibility."""
+
 from __future__ import annotations
 
 from enum import StrEnum
@@ -13,7 +14,7 @@ class PermissionStatus(StrEnum):
 def microphone_permission() -> PermissionStatus:
     """Return current microphone TCC permission status via AVFoundation."""
     try:
-        import AVFoundation  # type: ignore[import-untyped]
+        import AVFoundation
 
         status = AVFoundation.AVCaptureDevice.authorizationStatusForMediaType_("soun")
         # 0=NotDetermined, 1=Restricted, 2=Denied, 3=Authorized
@@ -32,7 +33,7 @@ def request_microphone_access() -> None:
     Has no effect if permission is already determined.
     """
     try:
-        import AVFoundation  # type: ignore[import-untyped]
+        import AVFoundation
 
         AVFoundation.AVCaptureDevice.requestAccessForMediaType_completionHandler_(
             "soun", lambda _: None
@@ -47,7 +48,7 @@ def accessibility_trusted() -> bool:
     Required for pynput GlobalHotKeys to register (R-19).
     """
     try:
-        import ApplicationServices  # type: ignore[import-untyped]
+        import ApplicationServices
 
         return bool(ApplicationServices.AXIsProcessTrusted())
     except Exception:

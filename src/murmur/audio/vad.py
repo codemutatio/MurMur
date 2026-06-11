@@ -1,4 +1,5 @@
 """Voice Activity Detection protocol and Silero adapter."""
+
 from __future__ import annotations
 
 from typing import Protocol
@@ -29,14 +30,14 @@ class SileroVAD:
     """
 
     def __init__(self) -> None:
-        import torch  # type: ignore[import-untyped]
-        from silero_vad import load_silero_vad  # type: ignore[import-untyped]
+        import torch
+        from silero_vad import load_silero_vad
 
         torch.set_num_threads(1)
         self._model = load_silero_vad()
 
     def speech_prob(self, frame: np.ndarray) -> float:
-        import torch  # type: ignore[import-untyped]
+        import torch
 
         from murmur.audio import SAMPLE_RATE
 

@@ -1,9 +1,11 @@
 """Audio source protocol and sounddevice adapter."""
+
 from __future__ import annotations
 
+import contextlib
 import queue
 import threading
-from typing import Protocol
+from typing import Any, Protocol
 
 import numpy as np
 
@@ -44,20 +46,20 @@ class SounddeviceSource:
     """
 
     def __init__(self) -> None:
-        self._stream: object | None = None
+        self._stream: Any = None
         self._frames_q: queue.Queue[np.ndarray] = queue.Queue(maxsize=100)
         self._dropped_frames: int = 0
         self._lock = threading.Lock()
 
     def open(self, device: str) -> None:
-        import sounddevice as sd  # type: ignore[import-untyped]
+        import sounddevice as sd
 
         from murmur.audio import FRAME_SAMPLES, SAMPLE_RATE
 
         self.close()
         # Re-initialize PortAudio so it re-reads the device list.
-        sd._terminate()  # type: ignore[attr-defined]
-        sd._initialize()  # type: ignore[attr-defined]
+        sd._terminate()  # private PortAudio API — reinitialises device list
+        sd._initialize()
 
         frames_q = self._frames_q
 
@@ -94,11 +96,9 @@ class SounddeviceSource:
             stream = self._stream
             self._stream = None
         if stream is not None:
-            try:
-                stream.stop()  # type: ignore[union-attr]
-                stream.close()  # type: ignore[union-attr]
-            except Exception:
-                pass
+            with contextlib.suppress(Exception):
+                stream.stop()
+                stream.close()
 
     def read(self, timeout: float) -> np.ndarray | None:
         try:
@@ -108,7 +108,7 @@ class SounddeviceSource:
 
     def default_device_signature(self) -> str:
         try:
-            import sounddevice as sd  # type: ignore[import-untyped]
+            import sounddevice as sd
 
             info = sd.query_devices(kind="input")
             return str(info.get("name", "")) if isinstance(info, dict) else ""

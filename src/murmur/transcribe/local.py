@@ -2,6 +2,7 @@
 
 Audio is always passed as a float32 numpy array — NO ffmpeg on this machine.
 """
+
 from __future__ import annotations
 
 import platform
@@ -61,7 +62,7 @@ class MlxWhisperTranscriber:
             TranscriptionError: on any mlx-whisper failure.
         """
         try:
-            import mlx_whisper  # type: ignore[import-untyped]
+            import mlx_whisper
         except ImportError as exc:
             raise TranscriptionError(
                 "mlx_whisper is not installed. Install it with: pip install mlx-whisper"

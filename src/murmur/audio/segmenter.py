@@ -3,6 +3,7 @@
 Pure logic — no I/O. Uses the VoiceDetector protocol, so it runs with
 AmplitudeVAD in tests and SileroVAD in production.
 """
+
 from __future__ import annotations
 
 from collections import deque
@@ -17,7 +18,7 @@ from murmur.audio import FRAME_SAMPLES, POST_ROLL_S, PRE_ROLL_S, SAMPLE_RATE
 from murmur.audio.vad import VoiceDetector
 
 # Pre/post-roll in frames
-_PRE_ROLL_FRAMES = round(PRE_ROLL_S * SAMPLE_RATE / FRAME_SAMPLES)   # 10 @ 16kHz/512
+_PRE_ROLL_FRAMES = round(PRE_ROLL_S * SAMPLE_RATE / FRAME_SAMPLES)  # 10 @ 16kHz/512
 _POST_ROLL_FRAMES = round(POST_ROLL_S * SAMPLE_RATE / FRAME_SAMPLES)  # 10 @ 16kHz/512
 
 
@@ -139,6 +140,10 @@ class Segmenter:
         if self._state is _State.IDLE:
             return None
         return self._close_segment()
+
+    def reset_vad(self) -> None:
+        """Reset the VAD internal state (called on stream reopen)."""
+        self._vad.reset()
 
     # ------------------------------------------------------------------
     # Internal helpers

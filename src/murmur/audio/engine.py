@@ -9,6 +9,7 @@ Gate ordering (checked each tick, in priority order):
   3. Disk < 2 GiB → flush, close, icon ⚠ + one-shot notification
   4. All clear → open stream if not open, icon ●
 """
+
 from __future__ import annotations
 
 import logging
@@ -212,7 +213,7 @@ class CaptureEngine(threading.Thread):
         if seg is not None:
             self._emit_segment(seg)
         self._source.close()
-        self._segmenter._vad.reset()  # type: ignore[attr-defined]
+        self._segmenter.reset_vad()
 
     def _emit_segment(self, seg: object) -> None:
         """Write segment to spool and enqueue for transcription."""

@@ -1,4 +1,5 @@
 """Tests for murmur bench CLI path — T-16, AC-20 de-risking."""
+
 from __future__ import annotations
 
 import wave
@@ -13,7 +14,7 @@ from murmur.cli import main
 
 def _write_fake_wav(path: Path, duration_s: float = 1.0, sr: int = 16000) -> None:
     """Write a valid 16 kHz mono WAV file for bench testing."""
-    samples = (np.sin(np.linspace(0, 2 * np.pi * 440 * duration_s, int(sr * duration_s))) * 0.5)
+    samples = np.sin(np.linspace(0, 2 * np.pi * 440 * duration_s, int(sr * duration_s))) * 0.5
     pcm = (samples * 32767).astype(np.int16)
     with wave.open(str(path), "wb") as wf:
         wf.setnchannels(1)
@@ -42,7 +43,9 @@ def test_bench_reports_rtf_with_fake(
     fake_result = TranscriptionResult(
         text="bench test",
         segments=(
-            SegmentScore(text="bench test", no_speech_prob=0.0, compression_ratio=1.0, avg_logprob=-0.3),
+            SegmentScore(
+                text="bench test", no_speech_prob=0.0, compression_ratio=1.0, avg_logprob=-0.3
+            ),
         ),
     )
 
@@ -54,7 +57,7 @@ def test_bench_reports_rtf_with_fake(
             return_value=fake_result,
         ),
     ):
-        result = main(["bench", str(wav_path)])
+        main(["bench", str(wav_path)])
 
     out = capsys.readouterr().out
     assert "RTF" in out

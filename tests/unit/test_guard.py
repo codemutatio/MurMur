@@ -1,11 +1,9 @@
 """Tests for murmur.transcribe.guard — T-6."""
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 from murmur.transcribe.base import SegmentScore, TranscriptionResult
 from murmur.transcribe.guard import (
-    AVG_LOGPROB_MIN,
     COMPRESSION_RATIO_MAX,
     NO_SPEECH_PROB_MAX,
     clean_result,

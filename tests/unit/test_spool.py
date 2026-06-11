@@ -1,13 +1,12 @@
 """Tests for murmur.audio.spool — T-3."""
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from murmur.audio import FRAME_SAMPLES, SAMPLE_RATE
 from murmur.audio.segmenter import Segment
 from murmur.audio.spool import (
     list_spool,
@@ -18,14 +17,14 @@ from murmur.audio.spool import (
 
 
 def _make_segment(start: datetime | None = None, n_samples: int = 1024) -> Segment:
-    start = start or datetime(2026, 6, 12, 10, 30, 45, 123000, tzinfo=timezone.utc)
+    start = start or datetime(2026, 6, 12, 10, 30, 45, 123000, tzinfo=UTC)
     samples = np.random.default_rng(42).uniform(-0.5, 0.5, n_samples).astype(np.float32)
     return Segment(samples=samples, start_at=start)
 
 
 def test_wav_roundtrip_and_filename_timestamp(tmp_path: Path) -> None:
     """WAV round-trip: write → load returns a float32 array of similar content; filename encodes timestamp."""
-    start = datetime(2026, 6, 12, 14, 5, 3, 250000, tzinfo=timezone.utc)
+    start = datetime(2026, 6, 12, 14, 5, 3, 250000, tzinfo=UTC)
     seg = _make_segment(start=start, n_samples=1600)
     path = write_segment_wav(tmp_path, seg)
 
@@ -59,9 +58,8 @@ def test_write_is_atomic(tmp_path: Path) -> None:
 
 def test_parse_segment_start_roundtrip() -> None:
     """parse_segment_start reconstructs a datetime from the filename."""
-    start = datetime(2026, 6, 12, 14, 5, 3, 123000, tzinfo=timezone.utc)
-    seg = _make_segment(start=start)
-    spool = Path("/tmp")
+    start = datetime(2026, 6, 12, 14, 5, 3, 123000, tzinfo=UTC)
+    _make_segment(start=start)
     # We just need the filename, not to write the file
     millis = start.microsecond // 1000
     filename = f"{start:%Y%m%d-%H%M%S}-{millis:03d}.wav"

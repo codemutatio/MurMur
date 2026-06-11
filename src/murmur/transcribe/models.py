@@ -4,6 +4,7 @@ Uses huggingface_hub.snapshot_download with explicit sha256 checking against
 HF LFS metadata (huggingface_hub does NOT reliably self-verify — see open
 issues #2364/#3643 confirmed in plan).
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -56,9 +57,7 @@ class ModelManager:
             ValueError: if *model* is not in MODEL_REPOS.
         """
         if model not in MODEL_REPOS:
-            raise ValueError(
-                f"Unknown model '{model}'. Known models: {list(MODEL_REPOS)}"
-            )
+            raise ValueError(f"Unknown model '{model}'. Known models: {list(MODEL_REPOS)}")
 
         repo = MODEL_REPOS[model]
         snapshot_path = self._download(repo)
@@ -77,7 +76,7 @@ class ModelManager:
     # ------------------------------------------------------------------
 
     def _download(self, repo: str) -> str:
-        from huggingface_hub import snapshot_download  # type: ignore[import-untyped]
+        from huggingface_hub import snapshot_download
 
         progress = self._progress
 
@@ -86,25 +85,28 @@ class ModelManager:
             kwargs["cache_dir"] = str(self._cache_dir)
         if progress is not None:
             try:
-                from tqdm.auto import tqdm  # type: ignore[import-untyped]
+                from tqdm.auto import tqdm  # type: ignore[import-untyped]  # tqdm has no stubs
 
-                class _ProgressTqdm(tqdm):
+                _cb = progress  # narrowed local to avoid None-check confusion in closure
+
+                class _ProgressTqdm(tqdm):  # type: ignore[misc]
                     def update(self, n: int = 1) -> bool | None:
-                        result = super().update(n)
-                        progress(int(self.n), int(self.total or 0))
+                        result: bool | None = super().update(n)
+                        _cb(int(self.n), int(self.total or 0))
                         return result
 
                 kwargs["tqdm_class"] = _ProgressTqdm
             except ImportError:
                 pass
 
-        return snapshot_download(**kwargs)
+        result: str = snapshot_download(**kwargs)
+        return result
 
     def _verify(self, repo: str, snapshot_path: str) -> None:
         """SHA256-check every LFS file in *snapshot_path* against HF metadata."""
         api = self._api
         if api is None:
-            from huggingface_hub import HfApi  # type: ignore[import-untyped]
+            from huggingface_hub import HfApi
 
             api = HfApi()
 
@@ -150,8 +152,7 @@ class ModelManager:
 
                 shutil.rmtree(snapshot_path, ignore_errors=True)
                 raise ChecksumError(
-                    f"Checksum mismatch for {rfilename}: "
-                    f"expected {expected_sha256}, got {actual}"
+                    f"Checksum mismatch for {rfilename}: expected {expected_sha256}, got {actual}"
                 )
 
     def _marker_path(self, model: str) -> Path:

@@ -6,10 +6,13 @@ GlobalHotKeys format and registers a listener thread.
 Degrades gracefully when Accessibility permission is not granted (E-2, R-19):
 start() returns False and the app continues without the hotkey.
 """
+
 from __future__ import annotations
 
+import contextlib
 import logging
 from collections.abc import Callable
+from typing import Any
 
 from murmur.mac import permissions as _permissions_module
 
@@ -27,8 +30,23 @@ _MODIFIER_MAP: dict[str, str] = {
 # Known function/special key names allowed as multi-character non-modifier tokens
 _SPECIAL_KEYS: frozenset[str] = frozenset(
     [f"f{n}" for n in range(1, 20)]
-    + ["tab", "space", "esc", "delete", "backspace", "enter", "return",
-       "up", "down", "left", "right", "home", "end", "page_up", "page_down"]
+    + [
+        "tab",
+        "space",
+        "esc",
+        "delete",
+        "backspace",
+        "enter",
+        "return",
+        "up",
+        "down",
+        "left",
+        "right",
+        "home",
+        "end",
+        "page_up",
+        "page_down",
+    ]
 )
 
 
@@ -47,9 +65,7 @@ def to_pynput_spec(toggle: str) -> str:
         part = part.strip()
         if part in _MODIFIER_MAP:
             converted.append(_MODIFIER_MAP[part])
-        elif len(part) == 1:
-            converted.append(part)
-        elif part in _SPECIAL_KEYS:
+        elif len(part) == 1 or part in _SPECIAL_KEYS:
             converted.append(part)
         else:
             raise ValueError(
@@ -66,10 +82,10 @@ class HotkeyListener:
     only calls controller.toggle_pause() which is thread-safe.
     """
 
-    def __init__(self, toggle: str, on_toggle: Callable[[], None]) -> None:
+    def __init__(self, toggle: str, on_toggle: Callable[[], Any]) -> None:
         self._toggle = toggle
         self._on_toggle = on_toggle
-        self._listener: object | None = None
+        self._listener: Any = None
 
     def start(self) -> bool:
         """Register the hotkey listener.
@@ -87,7 +103,7 @@ class HotkeyListener:
             return False
 
         try:
-            from pynput.keyboard import GlobalHotKeys  # type: ignore[import-untyped]
+            from pynput.keyboard import GlobalHotKeys
 
             spec = to_pynput_spec(self._toggle)
             listener = GlobalHotKeys({spec: self._on_toggle})
@@ -102,8 +118,6 @@ class HotkeyListener:
     def stop(self) -> None:
         """Stop the hotkey listener. Idempotent."""
         if self._listener is not None:
-            try:
-                self._listener.stop()  # type: ignore[union-attr]
-            except Exception:
-                pass
+            with contextlib.suppress(Exception):
+                self._listener.stop()
             self._listener = None

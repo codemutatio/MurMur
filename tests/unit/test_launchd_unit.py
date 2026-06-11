@@ -1,4 +1,5 @@
 """Unit tests for mac/launchd.py plist rendering — T-19, AC-29."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -58,9 +59,8 @@ def test_render_run_at_load_false() -> None:
     )
     # The RunAtLoad value should be <false/>
     import re
-    run_at_load_match = re.search(
-        r"<key>RunAtLoad</key>\s*<(true|false)/>", content
-    )
+
+    run_at_load_match = re.search(r"<key>RunAtLoad</key>\s*<(true|false)/>", content)
     assert run_at_load_match is not None
     assert run_at_load_match.group(1) == "false"
 

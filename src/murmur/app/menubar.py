@@ -16,28 +16,30 @@ Menu structure (R-12):
   ---
   Quit
 """
+
 from __future__ import annotations
 
 import logging
 import subprocess
 from datetime import date
 from pathlib import Path
+from typing import Any
 
-import rumps  # type: ignore[import-untyped]
+import rumps
 
 from murmur.control import Controller, IconState, StatusBoard
 
 _log = logging.getLogger(__name__)
 
 
-class MurmurApp(rumps.App):
+class MurmurApp(rumps.App):  # type: ignore[misc]
     """Menubar application for Murmur."""
 
     def __init__(
         self,
         controller: Controller,
         status: StatusBoard,
-        runtime: object,
+        runtime: Any,
         transcripts_dir: Path,
     ) -> None:
         super().__init__("Murmur", title=IconState.RECORDING.value)
@@ -47,18 +49,10 @@ class MurmurApp(rumps.App):
         self._transcripts_dir = transcripts_dir
 
         # Menu items (order matches R-12)
-        self._item_pause_resume = rumps.MenuItem(
-            "Pause", callback=self._on_pause_resume
-        )
-        self._item_pause_30 = rumps.MenuItem(
-            "Pause for 30 min", callback=self._on_pause_30
-        )
-        self._item_pause_1h = rumps.MenuItem(
-            "Pause for 1 h", callback=self._on_pause_1h
-        )
-        self._item_pause_day = rumps.MenuItem(
-            "Pause for rest of day", callback=self._on_pause_day
-        )
+        self._item_pause_resume = rumps.MenuItem("Pause", callback=self._on_pause_resume)
+        self._item_pause_30 = rumps.MenuItem("Pause for 30 min", callback=self._on_pause_30)
+        self._item_pause_1h = rumps.MenuItem("Pause for 1 h", callback=self._on_pause_1h)
+        self._item_pause_day = rumps.MenuItem("Pause for rest of day", callback=self._on_pause_day)
         self._item_open_today = rumps.MenuItem(
             "Open today's transcript", callback=self._on_open_today
         )
@@ -128,9 +122,7 @@ class MurmurApp(rumps.App):
         if not transcript.exists():
             from murmur.mac.notify import OsascriptNotifier
 
-            OsascriptNotifier().notify(
-                "Murmur", f"No transcript yet for today ({today:%Y-%m-%d})."
-            )
+            OsascriptNotifier().notify("Murmur", f"No transcript yet for today ({today:%Y-%m-%d}).")
             return
         subprocess.run(["open", str(transcript)], check=False)
 
@@ -139,7 +131,7 @@ class MurmurApp(rumps.App):
 
     def _on_quit(self, _sender: object) -> None:
         try:
-            self._runtime.stop()  # type: ignore[union-attr]
+            self._runtime.stop()
         except Exception as exc:
             _log.error("Error during stop: %s", exc)
         rumps.quit_application()

@@ -1,12 +1,12 @@
 """Tests for app/hotkey.py — T-18, R-13, E-2."""
+
 from __future__ import annotations
 
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from murmur.app.hotkey import HotkeyListener, to_pynput_spec
-
 
 # ---------------------------------------------------------------------------
 # to_pynput_spec
@@ -52,13 +52,16 @@ def test_untrusted_degrades_gracefully() -> None:  # [E-2]
 def test_trusted_registers_hotkey() -> None:
     """start() returns True and registers GlobalHotKeys when Accessibility is granted."""
     mock_global_hotkeys_instance = MagicMock()
-    MockGlobalHotKeys = MagicMock(return_value=mock_global_hotkeys_instance)
+    mock_global_hotkeys_cls = MagicMock(return_value=mock_global_hotkeys_instance)
 
     with (
         patch("murmur.mac.permissions.accessibility_trusted", return_value=True),
         patch.dict(
             "sys.modules",
-            {"pynput": MagicMock(), "pynput.keyboard": MagicMock(GlobalHotKeys=MockGlobalHotKeys)},
+            {
+                "pynput": MagicMock(),
+                "pynput.keyboard": MagicMock(GlobalHotKeys=mock_global_hotkeys_cls),
+            },
         ),
     ):
         called: list[bool] = []
