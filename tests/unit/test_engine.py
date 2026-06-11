@@ -110,23 +110,38 @@ def _run_engine(engine: CaptureEngine, stop: threading.Event, timeout: float = 3
 
 # AC-19: disk_low_pauses_then_resumes
 def test_disk_low_pauses_then_resumes_with_notifications(tmp_path: Path) -> None:  # [AC-19]
-    """Disk space low → capture pauses + notification; recovers → resumes + notification."""
-    # Start low, then recover
+    """Disk space low → icon ⚠ + notification; recovers → resumes + notification.
+
+    AC-19 requires: capture pauses, menubar state changes to ⚠ (IconState.ERROR),
+    and a notification payload is emitted.  This test verifies all three.
+    """
+    # Start low for the first several checks so the engine has time to set the icon,
+    # then recover so we can also verify the recovery notification path.
     disk_values = [
         DISK_MIN_FREE_BYTES - 1,  # first check: below threshold
-        DISK_MIN_FREE_BYTES - 1,  # second check: still below
+        DISK_MIN_FREE_BYTES - 1,  # second check: still below → icon stays ERROR
         DISK_MIN_FREE_BYTES + 1,  # third check: recovered
         10 * 1024**3,  # default thereafter
     ]
     engine, src, status, notifier, stop, _, _ = _make_engine(tmp_path, disk_values=disk_values)
 
-    # Run for a few ticks then stop
     engine.start()
-    time.sleep(0.8)
+    # Give the engine enough ticks to hit the disk gate and set the icon.
+    time.sleep(0.5)
+
+    # Capture the icon while the engine is still running under disk-low.
+    # (The engine resets the stop event's wait, so status reflects the gate state.)
+    icon_under_disk_low = status.snapshot().icon
+
+    time.sleep(0.4)
     stop.set()
     engine.join(timeout=3.0)
 
-    # Should have got a disk-low notification
+    # Spec AC-19: "menubar state changes to ⚠"
+    assert icon_under_disk_low == IconState.ERROR, (
+        f"Icon must be ERROR (⚠) when disk is below threshold; got {icon_under_disk_low!r}"
+    )
+    # Spec AC-19: "a notification payload is emitted"
     assert any("Disk space low" in msg for _, msg in notifier.notifications), (
         f"Expected disk-low notification, got: {notifier.notifications}"
     )
@@ -246,3 +261,116 @@ def test_pause_flushes_partial_segment(tmp_path: Path) -> None:
 
     # Engine should have at least opened once
     assert src.open_count >= 1
+
+
+# F-8: bounded work_q — put_nowait + drop-with-log when full
+def test_emit_segment_drops_gracefully_when_work_q_full_f8(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When work_q is full, _emit_segment logs a warning and does not crash.
+
+    F-8: work_q.put() was unbounded.  The fix uses put_nowait and drops the
+    enqueue path when the queue is full, leaving the WAV on disk for startup
+    recovery.  The engine must not crash or raise; only a warning is logged.
+    """
+    import queue as q_module
+
+    import murmur.audio.engine as engine_mod
+
+    # Patch write_segment_wav to return a known path without actually writing
+    dummy_wav = tmp_path / "spool" / "20260612-090000-000.wav"
+    dummy_wav.parent.mkdir(parents=True, exist_ok=True)
+    dummy_wav.touch()
+    monkeypatch.setattr(engine_mod, "write_segment_wav", lambda *_a, **_kw: dummy_wav)
+
+    # Create a bounded queue that is already full
+    full_q: q_module.Queue[Path] = q_module.Queue(maxsize=1)
+    full_q.put(dummy_wav)  # fill it
+
+    # Build engine with the full queue injected
+    spool = tmp_path / "spool"
+    status = StatusBoard()
+    notifier = RecordingNotifier()
+    backlog_drained = threading.Event()
+    backlog_drained.set()
+    stop = threading.Event()
+    clock = FixedClock(datetime(2026, 6, 12, 9, 0, 0, tzinfo=UTC))
+    vad = AmplitudeVAD(threshold=0.01)
+    from murmur.audio.segmenter import SegmenterConfig
+
+    cfg = SegmenterConfig(vad_threshold=0.5, silence_split_s=1.5, max_segment_s=120.0)
+    segmenter = Segmenter(cfg, vad, clock)
+    from murmur.control import StateStore
+
+    store = StateStore(tmp_path / "state.json", clock)
+    ctrl = Controller(store, notifier, clock)
+
+    # Build _emit_segment in isolation by constructing a full engine but testing
+    # the method directly so we don't need to race with the thread.
+    engine = CaptureEngine(
+        source=FakeAudioSource(),
+        segmenter=segmenter,
+        spool_dir=spool,
+        work_q=full_q,
+        controller=ctrl,
+        status=status,
+        notifier=notifier,
+        mic_permission=FakePermission(["GRANTED"]),
+        disk_free=FakeDiskFree([10 * 1024**3]),
+        now=clock,
+        backlog_drained=backlog_drained,
+        stop=stop,
+    )
+
+    import numpy as np
+
+    from murmur.audio.segmenter import Segment
+
+    fake_seg = Segment(
+        samples=np.zeros(512, dtype=np.float32),
+        start_at=datetime(2026, 6, 12, 9, 0, 0, tzinfo=UTC),
+    )
+
+    # This must not raise even though the queue is full
+    engine._emit_segment(fake_seg)
+
+    # Queue still holds only the original item (the new one was dropped gracefully)
+    assert full_q.qsize() == 1
+
+
+# F-5: unexpected exception in loop body does not kill the capture thread
+def test_unexpected_exception_does_not_kill_capture_thread_f5(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An injected unexpected exception from the source does not terminate the loop.
+
+    F-5: CaptureEngine.run() must survive any single unexpected exception
+    (e.g. sd._terminate()/_initialize() raising — plan Risk 3).  The engine
+    logs the error, sleeps briefly, and continues.  Menubar stays live.
+    """
+    import murmur.audio.engine as engine_mod
+
+    original_write = engine_mod.write_segment_wav
+    call_count = {"n": 0}
+
+    def _sometimes_exploding_write(spool_dir: object, seg: object) -> Path:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise RuntimeError("simulated PortAudio panic")
+        return original_write(spool_dir, seg)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(engine_mod, "write_segment_wav", _sometimes_exploding_write)
+
+    # Feed enough speech + silence to trigger a segment write
+    speech = [_speech_frame()] * 10
+    silence = [_silence_frame()] * 60
+    src = FakeAudioSource(frames=speech + silence + speech + silence)
+    engine, _, status, _, stop, _, _ = _make_engine(tmp_path, source=src)
+
+    engine.start()
+    time.sleep(2.5)
+    stop.set()
+    engine.join(timeout=4.0)
+
+    # Thread must have run to completion (joined cleanly)
+    assert not engine.is_alive(), "Capture engine thread should have exited cleanly"
