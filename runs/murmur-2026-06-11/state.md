@@ -7,8 +7,8 @@ PRD provided verbatim at `runs/murmur-2026-06-11/prd.md` — "Murmur": Personal 
 
 ## Current
 **Pipeline:** delivery
-**Stage:** DOCUMENT
-**Status:** running
+**Stage:** SHIP
+**Status:** complete
 **Iteration counters:** validation iteration 2
 
 ## Size
@@ -31,6 +31,7 @@ PRD provided verbatim at `runs/murmur-2026-06-11/prd.md` — "Murmur": Personal 
 | 2026-06-12T01:28:57+0300 | VALIDATE iter 1 verdicts: test-engineer FAIL (1 blocker, 3 majors, 4 minors; AC-29 ruled verified-minor), code-reviewer FAIL (5 majors, 8 minors), security PASS (5 minors). Merged report written; fix-list-1.md compiled: F-1..F-8 (1 blocker, 7 majors, deduplicated). Implementer relaunched |
 | 2026-06-12T01:44:11+0300 | implementer fixed F-1..F-8 (no disputes; F-8 resolved by bounding work_q to 256 + put_nowait drop path). Orchestrator verified: 225 passed + 1 xfail, cov 84.72%, ruff+mypy green. → VALIDATE iter 2: TE + CR full re-run, security scoped diff re-check |
 | 2026-06-12T01:56:17+0300 | VALIDATE iter 2 verdicts: TE PASS, CR PASS, SEC PASS — zero blockers/majors. 21/21 AUTO ACs verified, 9/9 MANUAL procedures audited, cov 84.72%, 233 passed + 1 xfail. 24 minors logged total. Validate gate PASSED (2 of 3 iterations). Stage → DOCUMENT |
+| 2026-06-12T02:12:16+0300 | doc-writer completed (README, docs/architecture.md, CHANGELOG, runbook fix; 11 commands executed; 3 discrepancies flagged incl. D-3 inert stt.engine key). Document gate PASSED. Two orchestrator style-only commits (linter-prescribed) cleaned TE iter-2 test file. Ship checklist green: 233 passed + 1 xfail, cov 84.72%, ruff+format+mypy clean, branch contains main, conventional history. final-report.md written. Stage → SHIP, status COMPLETE. Branch left local — NOT pushed |
 
 ## Checkpoint Record
 **Approved:** 2026-06-12T00:05:07+0300 (user selected "Approve", size stays L) · **Edits requested:** none
