@@ -176,9 +176,12 @@ class Segmenter:
         frames = self._active_frames
         probs = self._active_probs
 
-        # Find min-RMS frame across the active buffer
+        # Find min-RMS frame across the active buffer.
+        # Lower-bound to 1 so part 1 always contains at least one frame (F-7):
+        # argmin returning 0 on uniform-RMS audio would otherwise emit a zero-frame
+        # segment and leave the entire buffer in part 2, causing pathological re-splits.
         rms_values = [float(np.sqrt(np.mean(f.astype(np.float64) ** 2))) for f in frames]
-        split_idx = int(np.argmin(rms_values))
+        split_idx = max(1, int(np.argmin(rms_values)))
 
         # Part 1: frames[0..split_idx]
         part1_frames = frames[: split_idx + 1]

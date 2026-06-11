@@ -230,3 +230,40 @@ def test_pre_roll_less_than_full_when_stream_starts() -> None:
     assert len(results) == 1
     # Should still produce a segment without crashing
     assert len(results[0].samples) > 0
+
+
+# F-7: force-split with uniform RMS (argmin returns 0 without the lower-bound fix)
+def test_force_split_uniform_rms_no_1_frame_segment_f7() -> None:
+    """Force-split on uniform-RMS audio must not produce a 1-frame (32 ms) segment.
+
+    When all frames have the same amplitude, argmin returns 0.  Without the
+    lower-bound fix, part 1 would be 1 frame (~32 ms) and part 2 would be the
+    entire remaining buffer — causing pathological re-splits.
+
+    F-7 requirement: split_idx ≥ 1, so every split produces a part 1 of at least
+    2 frames (64 ms), and each resulting segment is ≤ max_segment_s.
+    """
+    segmenter, _, _ = _make_segmenter(
+        max_segment_s=120.0,
+        silence_split_s=200.0,  # never silence-close
+    )
+
+    # Uniform amplitude: all frames have identical RMS → argmin is deterministically 0
+    # without the fix.
+    n_frames = math.ceil(121.0 * SAMPLE_RATE / FRAME_SAMPLES)
+    results: list[Segment] = []
+    for _ in range(n_frames):
+        frame = np.full(FRAME_SAMPLES, 0.5, dtype=np.float32)
+        results.extend(segmenter.push(frame))
+
+    seg = segmenter.flush()
+    if seg is not None:
+        results.append(seg)
+
+    assert results, "Expected at least one segment from force-split"
+    for s in results:
+        dur_s = len(s.samples) / SAMPLE_RATE
+        assert dur_s >= 2 * FRAME_SAMPLES / SAMPLE_RATE - 0.001, (
+            f"Segment too short ({dur_s:.4f} s — looks like a 1-frame degenerate split)"
+        )
+        assert dur_s <= 120.5, f"Segment too long ({dur_s:.1f} s)"
