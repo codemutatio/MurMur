@@ -7,6 +7,7 @@ on repeated launches, F-8 spool recovery path, and regression mutations.
 
 from __future__ import annotations
 
+import contextlib
 import queue
 import threading
 import time
@@ -244,10 +245,8 @@ def test_f8_dropped_wav_recoverable_by_list_spool(
     # Simulate put_nowait failing (queue full) — WAV stays on disk
     full_q: queue.Queue[Path] = queue.Queue(maxsize=1)
     full_q.put(tmp_path / "other.wav")  # fill the queue
-    try:
-        full_q.put_nowait(wav_path)
-    except queue.Full:
-        pass  # WAV was NOT enqueued — stays on disk
+    with contextlib.suppress(queue.Full):
+        full_q.put_nowait(wav_path)  # WAV was NOT enqueued — stays on disk
 
     # The WAV must still exist on disk
     assert wav_path.exists(), "WAV must stay on disk when put_nowait fails"
