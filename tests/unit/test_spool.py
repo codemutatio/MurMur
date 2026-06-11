@@ -112,3 +112,22 @@ def test_write_segment_wav_filename_millis(tmp_path: Path) -> None:
     seg = _make_segment(start=start)
     path = write_segment_wav(tmp_path, seg)
     assert "-750.wav" in path.name
+
+
+# F-4 / security: non-conforming filename raises ValueError
+def test_parse_segment_start_raises_on_bad_filename_f4() -> None:
+    """parse_segment_start raises ValueError on a non-conforming filename.
+
+    This ensures the caller (worker._process) can catch ValueError and skip the
+    file rather than crash (F-4 / security minor folded into F-4).
+    """
+    import pytest
+
+    bad_names = [
+        "not-a-timestamp.wav",
+        "2026-06-12.wav",  # date-only, wrong format
+        "nodashes.wav",
+    ]
+    for name in bad_names:
+        with pytest.raises(ValueError):
+            parse_segment_start(Path(name))

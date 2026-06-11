@@ -234,3 +234,73 @@ def test_backlog_drained_event_set_even_with_no_spool(tmp_path: Path) -> None:
     worker.join(timeout=3.0)
 
     assert drained, "backlog_drained should be set even with empty spool"
+
+
+# F-4: unexpected exception type does not kill the worker loop
+def test_unexpected_exception_does_not_kill_worker_loop_f4(tmp_path: Path) -> None:
+    """Non-TranscriptionError exceptions are caught; worker continues to process later items.
+
+    A MemoryError/RuntimeError from numpy or mlx must not silently kill the worker
+    thread (daemon=True would leave the menubar showing ● while nothing transcribes).
+    """
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    transcripts = tmp_path / "Transcripts"
+
+    # First WAV will trigger a MemoryError; second WAV should still be processed.
+    _make_wav(spool, offset=0)
+    wav2 = _make_wav(spool, offset=1)
+
+    local = FakeTranscriber([MemoryError("out of memory"), "Recovered segment"])
+
+    worker, _, status, backlog_drained, stop = _make_worker(
+        spool, transcripts, local, backoff_s=0.01
+    )
+    worker.start()
+    backlog_drained.wait(timeout=5.0)
+    stop.set()
+    worker.join(timeout=5.0)
+
+    # Worker should still be alive (joined cleanly, not prematurely dead)
+    assert not worker.is_alive(), "Worker should have exited cleanly after stop"
+    # Second segment must have been processed (deleted)
+    assert not wav2.exists(), "Second WAV should have been processed despite earlier MemoryError"
+    # Error count incremented for the failed segment
+    assert status.snapshot().error_count >= 1
+
+
+# F-4: bad spool filename is skipped, worker continues
+def test_bad_filename_in_spool_is_skipped_f4(tmp_path: Path) -> None:
+    """Non-conforming WAV filename in spool → logged warning, worker skips and continues.
+
+    A filename that parse_segment_start cannot parse (ValueError) must not kill the
+    worker thread.  The worker should skip the file and continue with the next one.
+    """
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    transcripts = tmp_path / "Transcripts"
+
+    # Manually write a non-conforming WAV filename into the spool
+    import wave
+
+    bad_wav = spool / "not-a-timestamp.wav"
+    with wave.open(str(bad_wav), "w") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(b"\x00" * 3200)  # 100 ms of silence
+
+    # A well-formed WAV that should be processed normally
+    good_wav = _make_wav(spool, offset=5)
+
+    transcriber = FakeTranscriber(["Good segment"])
+    worker, _, _, backlog_drained, stop = _make_worker(spool, transcripts, transcriber)
+    worker.start()
+    backlog_drained.wait(timeout=5.0)
+    stop.set()
+    worker.join(timeout=5.0)
+
+    # Good WAV should have been processed and deleted
+    assert not good_wav.exists(), "Good WAV should have been processed after skipping bad file"
+    # Worker should be cleanly stopped
+    assert not worker.is_alive()

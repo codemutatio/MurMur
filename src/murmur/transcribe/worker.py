@@ -76,14 +76,21 @@ class TranscribeWorker(threading.Thread):
         self._backlog_drained.set()
         _log.info("Backlog drained; entering live loop")
 
-        # Live loop: drain work_q until stop
+        # Live loop: drain work_q until stop.
+        # The outer try/except ensures that any unexpected exception that escapes
+        # _process (e.g. an error from work_q.task_done itself) is logged and
+        # the loop continues rather than dying silently (F-4).
         while not self._stop_event.is_set():
             try:
                 wav_path = self._work_q.get(timeout=0.5)
             except queue.Empty:
                 continue
-            self._process(wav_path)
-            self._work_q.task_done()
+            try:
+                self._process(wav_path)
+            except Exception as exc:
+                _log.exception("Unhandled exception in worker loop body (continuing): %s", exc)
+            finally:
+                self._work_q.task_done()
 
     def _process(self, wav_path: Path) -> None:
         """Process one WAV file: load → transcribe → guard → append → maybe delete."""
@@ -98,7 +105,18 @@ class TranscribeWorker(threading.Thread):
             self._status.increment_errors()
             return
 
-        start_at = parse_segment_start(wav_path)
+        # Guard against non-conforming filenames (security finding folded into F-4).
+        # parse_segment_start raises ValueError on bad stems; skip and log rather than die.
+        try:
+            start_at = parse_segment_start(wav_path)
+        except ValueError as exc:
+            _log.warning(
+                "Skipping spool file with non-conforming filename %s: %s",
+                wav_path.name,
+                exc,
+            )
+            return
+
         t0 = time.monotonic()
 
         # Try local transcription, with retry/fallback policy
@@ -125,10 +143,11 @@ class TranscribeWorker(threading.Thread):
                 )
 
                 if consecutive_local < self._max_local_failures:
-                    # Retry local
+                    # Brief sleep between retries to avoid a tight spin on repeated failures.
+                    time.sleep(0.05)
                     continue
 
-                # 3rd consecutive failure — try fallback or give up
+                # max_local_failures reached — try fallback or give up
                 if self._fallback is not None:
                     try:
                         result = self._fallback.transcribe(
@@ -154,6 +173,18 @@ class TranscribeWorker(threading.Thread):
                     _log.error("No fallback configured; leaving %s in spool", wav_path.name)
                     self._status.increment_errors()
                     return
+            except Exception as exc:
+                # Unexpected exception (numpy/mlx panic, MemoryError, etc.) — log,
+                # skip this segment, and let the worker continue.  A daemon thread
+                # that dies silently (F-4) leaves the menubar showing ● while nothing
+                # transcribes for the rest of the process lifetime.
+                _log.exception(
+                    "Unexpected error transcribing %s (skipping segment): %s",
+                    wav_path.name,
+                    exc,
+                )
+                self._status.increment_errors()
+                return
 
         if result is None:
             return
