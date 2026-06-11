@@ -38,7 +38,14 @@ def prune_transcripts(
         8-day-old file is deleted; a 7-day-old file is kept (AC-9).
         OSError on individual files → logged and skipped (E-22).
     """
-    if retention_days == 0:
+    if retention_days <= 0:
+        # 0 = keep forever (AC-10); negative = misconfiguration, treat as no-op
+        # to prevent wiping files when the config value is invalid (F-2).
+        if retention_days < 0:
+            _log.warning(
+                "retention_days=%d is negative; treating as no-op to prevent data loss",
+                retention_days,
+            )
         return []
 
     if not transcripts_dir.exists():
