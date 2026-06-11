@@ -88,7 +88,13 @@ class Runtime:
         # Thread control
         self._stop_event = threading.Event()
         self._backlog_drained = threading.Event()
-        self._work_q: queue.Queue[Path] = queue.Queue()
+        # Bounded work queue (F-8): if the worker is dead or in backoff the queue
+        # would otherwise grow without bound.  Bound at 256 path slots (~8+ minutes
+        # of segments at the normal 2 s/segment rate).  If full, the engine logs a
+        # warning and drops the enqueue — the WAV file remains on disk and will be
+        # picked up by the startup scan on next launch (recovery story: spool is the
+        # durable queue; the in-process queue is a live optimisation layer only).
+        self._work_q: queue.Queue[Path] = queue.Queue(maxsize=256)
 
         # Injected or deferred production adapters
         self._source = source
