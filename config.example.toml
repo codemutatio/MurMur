@@ -1,0 +1,61 @@
+# Murmur configuration example
+# Copy to: ~/Library/Application Support/Murmur/config.toml
+
+[capture]
+# Input device name. "default" uses the macOS default input device.
+device = "default"
+# Silero VAD confidence threshold (0..1). Lower = more sensitive.
+vad_threshold = 0.5
+# Trailing silence duration that closes a speech segment (seconds).
+silence_split_s = 1.5
+# Maximum segment duration before a force-split (seconds).
+max_segment_s = 120.0
+
+[stt]
+# Local model: "large-v3" (highest accuracy) or "large-v3-turbo" (~4x faster).
+# Run `murmur bench` and `bakeoff.py` to compare on your voice before choosing.
+local_model = "large-v3"
+# OpenAI model for API fallback (requires api_fallback = true).
+api_model = "gpt-4o-transcribe"
+# Set true to retry failed local transcriptions via the OpenAI API.
+# Requires OPENAI_API_KEY in env or macOS Keychain (service: murmur-openai).
+api_fallback = false
+# BCP-47 language code passed to Whisper.
+language = "en"
+# Vocabulary hints fed to Whisper as initial_prompt. Add your domain terms here.
+vocab_hints = [
+    "Rivy",
+    "Yassir",
+    "BigQuery",
+    "Supabase",
+    "LLM",
+    "API",
+    "OAuth",
+    "PostgreSQL",
+    "TypeScript",
+    "JavaScript",
+    "React",
+    "Next.js",
+    "Vercel",
+    "Anthropic",
+    "Claude",
+]
+
+[storage]
+# Where to write daily transcript Markdown files.
+transcripts_dir = "~/Transcripts"
+# Temporary WAV spool directory (transient; shared disk budget with transcripts_dir).
+spool_dir = "~/Transcripts/spool"
+# Set true to keep WAV files after successful transcription (for debugging).
+keep_audio = false
+# Delete transcript files older than this many days. 0 = keep forever.
+retention_days = 365
+
+[hotkey]
+# Global keyboard shortcut to toggle pause/resume.
+# Supported modifiers: ctrl, alt, cmd, shift, super.
+toggle = "ctrl+alt+cmd+m"
+
+[notes]
+# v2 only — notes generation is not implemented in v1. Ignored.
+enabled = false
