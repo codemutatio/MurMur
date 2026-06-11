@@ -11,10 +11,12 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 
+from murmur.mac import permissions as _permissions_module
+
 _log = logging.getLogger(__name__)
 
-# Token map: our canonical names → pynput Key/str representations
-_TOKEN_MAP: dict[str, str] = {
+# Token map: modifier names → pynput bracket representations
+_MODIFIER_MAP: dict[str, str] = {
     "ctrl": "<ctrl>",
     "alt": "<alt>",
     "cmd": "<cmd>",
@@ -22,25 +24,37 @@ _TOKEN_MAP: dict[str, str] = {
     "super": "<super>",
 }
 
+# Known function/special key names allowed as multi-character non-modifier tokens
+_SPECIAL_KEYS: frozenset[str] = frozenset(
+    [f"f{n}" for n in range(1, 20)]
+    + ["tab", "space", "esc", "delete", "backspace", "enter", "return",
+       "up", "down", "left", "right", "home", "end", "page_up", "page_down"]
+)
+
 
 def to_pynput_spec(toggle: str) -> str:
     """Convert "ctrl+alt+cmd+m" → "<ctrl>+<alt>+<cmd>+m".
 
-    Single-character tokens are kept as-is. Unknown multi-character tokens
-    raise ValueError.
+    Rules:
+    - Known modifier tokens (ctrl, alt, cmd, shift, super) → bracketed form.
+    - Single-character tokens kept as-is.
+    - Known special key names (f1-f19, tab, esc, ...) kept as-is.
+    - Unknown multi-character tokens raise ValueError.
     """
     parts = toggle.split("+")
     converted: list[str] = []
     for part in parts:
         part = part.strip()
-        if part in _TOKEN_MAP:
-            converted.append(_TOKEN_MAP[part])
+        if part in _MODIFIER_MAP:
+            converted.append(_MODIFIER_MAP[part])
         elif len(part) == 1:
+            converted.append(part)
+        elif part in _SPECIAL_KEYS:
             converted.append(part)
         else:
             raise ValueError(
                 f"Unknown hotkey token '{part}' in spec '{toggle}'. "
-                f"Known modifiers: {list(_TOKEN_MAP)}"
+                f"Known modifiers: {list(_MODIFIER_MAP)}"
             )
     return "+".join(converted)
 
@@ -65,9 +79,7 @@ class HotkeyListener:
             False if Accessibility is not granted or pynput raises an error —
             app continues without hotkey (E-2).
         """
-        from murmur.mac.permissions import accessibility_trusted
-
-        if not accessibility_trusted():
+        if not _permissions_module.accessibility_trusted():
             _log.warning(
                 "Accessibility permission not granted; global hotkey disabled. "
                 "Grant access in System Settings → Privacy & Security → Accessibility."
