@@ -55,4 +55,41 @@ Created by the implementer in Stage 4; appended by the implementer during fix-li
 | F-8 | **Chose bounding over documentation.** `runtime.py`: `queue.Queue(maxsize=256)`. `engine.py:_emit_segment`: changed `work_q.put()` to `work_q.put_nowait()` with a `queue.Full` except that logs a warning. WAV stays on disk; startup scan picks it up on next launch. | `test_emit_segment_drops_gracefully_when_work_q_full_f8` (full queue, no crash, queue depth unchanged). | Bound 256 chosen: ~8+ minutes of segments at 2 s/segment before the in-process queue fills. The disk-low gate caps the blast radius independently (capture pauses at < 2 GiB free). Recovery story: spool is the durable queue — the in-process queue is an optimisation layer only. |
 
 ## Documentation
-<Doc-writer appends: files created/updated, examples executed, plan/code discrepancies found.>
+
+**Doc-writer:** murmur-2026-06-11, iteration 2, 2026-06-12
+
+### Files created / updated
+
+| File | Action | Notes |
+|------|--------|-------|
+| `/Users/faithomojola/Documents/MurMur/README.md` | Rewritten (full replacement of stub) | Complete front door: what/install/permissions/quick-start/config reference/API key/launchd/CLI reference/bake-off/menubar/transcript format/model weights/state locations/troubleshooting/known limitations |
+| `/Users/faithomojola/Documents/MurMur/docs/architecture.md` | Created | Thread model (ADR-1), data flow mic→VAD→spool→whisper→markdown, durability story (ADR-2), state files, device-change/sleep-wake mechanism, model checksum, hallucination guard constants, audio constants, startup sequence, notification attribution |
+| `/Users/faithomojola/Documents/MurMur/CHANGELOG.md` | Created | Keep-a-Changelog format, v0.1.0 entry covering full feature set + known limitations |
+| `/Users/faithomojola/Documents/MurMur/docs/manual-verification.md` | Fixed MV-20 step 1 | Procedure incorrectly used `bakeoff.py --duration 3600 --output bakeoff-60min.wav` — bakeoff.py's `--output` takes a `.md` path and the script does not save the recorded WAV to disk; replaced with a direct sounddevice recording snippet and a note explaining the constraint |
+
+### Commands executed (gate: every example run)
+
+| Command | Result |
+|---------|--------|
+| `uv run murmur --help` | PASS — full help text confirmed |
+| `uv run murmur run --help` | PASS |
+| `uv run murmur cat --help` | PASS |
+| `uv run murmur copy --help` | PASS |
+| `uv run murmur bench --help` | PASS |
+| `uv run python scripts/bakeoff.py --help` | PASS |
+| `uv run murmur cat today` against a fixture file | PASS — printed `# Transcript — 2026-06-12\n\n**[09:00]** Testing cat command.`, exit 0 |
+| `uv run python3 -c "import tomllib; ..."` on `config.example.toml` | PASS — all keys round-tripped correctly |
+| Config loader validation (`load_config(Path("config.example.toml"))`) | PASS — all values match expected defaults; no warnings |
+| Plist render via `render_plist(...)` | PASS — valid XML with all required keys |
+| `uv run pytest --tb=short -q` (before docs work) | PASS — 233 passed, 1 xfailed (pre-existing, AC-29 platform constraint) |
+| `uv run pytest --tb=short -q` (after docs work) | PASS — 233 passed, 1 xfailed, 0 failed |
+
+Note: The fixture file created during `cat today` verification was cleaned up before running the full test suite to avoid contaminating the `test_cat_missing_file_exit_1` tests, which rely on `~/Transcripts/YYYY-MM-DD.md` being absent.
+
+### Plan vs. code discrepancies found
+
+| # | Plan said | What the code actually does | Impact |
+|---|-----------|----------------------------|--------|
+| D-1 | `launchd/com.jay.murmur.plist.template` listed as a repo file in the repository layout | The `launchd/` directory exists but is empty. The plist is generated dynamically by `mac/launchd.py:render_plist()` at install time. There is no static template file. | None — the generated plist is correct and tested; the "template" was an architectural sketch that became code. |
+| D-2 | MV-20 procedure (plan T-20 / existing docs) used `bakeoff.py --duration 3600 --output bakeoff-60min.wav` to create a 60-minute WAV | `bakeoff.py` does not save the recorded WAV to disk; it holds the audio in memory and transcribes it. `--output` takes a `.md` path. The command as documented would never produce a `.wav` file. | Fixed in `docs/manual-verification.md`. |
+| D-3 | Plan contracts for `SttConfig` listed `engine: Literal["local","api"] = "local"` as a field | `config.py` does implement this field with exactly that default, but neither `runtime.py` nor any other production code reads `stt.engine` to switch modes — the fallback is always determined by `stt.api_fallback=true` and key availability, not by setting `engine="api"`. Setting `engine="api"` has no effect in the current code. | Minor aspirational surface — not documented as working. Config reference in README documents `api_fallback` as the operative switch; `engine` key is omitted from the README config reference since it has no runtime effect. |
