@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# uv / venv
+.venv/
+.uv/
+
+# Coverage
+.coverage
+htmlcov/
+
+# mypy
+.mypy_cache/
+
+# ruff
+.ruff_cache/
+
+# macOS
+.DS_Store
+*.swp
+
+# Murmur runtime (never commit sensitive runtime artifacts)
+*.lock
+state.json
+
+# Test artefacts
+*.wav
+bakeoff-*.md
