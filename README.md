@@ -169,7 +169,41 @@ Lookup order: `OPENAI_API_KEY` env var first, then Keychain. If `api_fallback = 
 
 ---
 
+## Desktop app (Murmur.app)
+
+Murmur can run as a proper macOS `.app` with a window UI. This is the **recommended** way to use it: a `.app` bundle is the only way the always-on agent can obtain Microphone permission, because its `Info.plist` declares `NSMicrophoneUsageDescription`. Bare framework Python cannot declare it, so `murmur run` under launchd never gets the mic prompt.
+
+```sh
+# Build Murmur.app and install it to /Applications:
+bash packaging/build_app.sh
+
+# Launch it (approve the "Murmur" Microphone prompt on first run):
+open -a Murmur
+```
+
+The build uses py2app in *alias* mode against the uv tool env in `~/.local`, so it is fast and does not bundle the multi-GB model stack. It is ad-hoc signed for this machine (not distributable). Re-run `packaging/build_app.sh` after code changes.
+
+**Window UI** — open it from the menubar's **Open Murmur Window** item:
+- **Today** — live status and an auto-refreshing transcript, with pause controls.
+- **History** — pick a past day and read its transcript.
+- **Settings** — edit vocab hints, retention, keep-audio, API fallback, and the hotkey; **Save** writes `config.toml` (applies on next launch).
+
+**Always-on at login (with mic):**
+
+```sh
+murmur install-app-agent      # launchd agent pointing at /Applications/Murmur.app
+murmur uninstall-agent        # remove it
+```
+
+Unlike `install-agent` (bare `murmur run`), `install-app-agent` points launchd at the signed bundle, so the login-spawned instance can obtain Microphone permission.
+
+> **Signing note.** The ad-hoc signature means the Microphone grant can reset when you rebuild. Sign with a self-signed or Developer ID certificate for a grant that persists across rebuilds. Notarization is only needed to distribute to other Macs.
+
+---
+
 ## Login autostart (launchd)
+
+> For microphone capture under launchd, use the **[Desktop app](#desktop-app-murmurapp)** (`murmur install-app-agent`). The bare `murmur install-agent` below runs framework Python directly, which **cannot** obtain Microphone permission — kept for non-capture/dev use.
 
 ```sh
 # Install — registers com.jay.murmur as a launchd user agent:
@@ -183,7 +217,7 @@ The installed plist is written to `~/Library/LaunchAgents/com.jay.murmur.plist` 
 
 **Note:** `KeepAlive = false`. The Quit menu item stops the agent permanently until the next login. If you want crash-restart, reinstall after manually editing the plist to set `KeepAlive = true`.
 
-**Permissions under launchd:** TCC permissions (Microphone, Accessibility) attach to the binary path, not the terminal. Grant them for the installed `murmur` binary path. Run `which murmur` after `uv sync` to find the path.
+**Permissions under launchd:** a bare `murmur run` agent (this command) **cannot** obtain Microphone permission — framework Python declares no `NSMicrophoneUsageDescription`, so macOS never shows the prompt and it never appears in System Settings → Microphone. For always-on capture, build the `.app` and use `murmur install-app-agent` (see [Desktop app](#desktop-app-murmurapp)). Accessibility (for the global hotkey) does attach to the binary path and can be granted there.
 
 ---
 
@@ -376,7 +410,7 @@ These are logged minors from validation that affect daily operation:
 
 2. **Same-run dropped WAV recovery.** When the in-process work queue is full (bounded at 256 entries, ~8+ minutes of segments), the capture engine logs a warning and skips enqueueing the WAV path. The WAV file remains on disk and will be picked up by the startup scanner on the next launch. It is not processed during the current run.
 
-3. **Notification attribution.** All notifications (Paused, Recording, errors) are sent via `osascript display notification`. Until notification permission is granted once in System Settings, they may be silently dropped or attributed to "Script Editor" rather than "Murmur". This is a consequence of using a Python script without a signed .app bundle. Granting notification permission once resolves the display attribution for that session.
+3. **Notification attribution.** All notifications (Paused, Recording, errors) are sent via `osascript display notification`, so they are attributed to "Script Editor" rather than "Murmur" and may be silently dropped until notification permission is granted once in System Settings. Now that a signed `.app` bundle exists (see [Desktop app](#desktop-app-murmurapp)), proper "Murmur" attribution is achievable by switching the notifier to the `UserNotifications` framework — not yet done. (The bundle already resolves the related Microphone-permission gap, which the osascript path does not depend on.)
 
 4. **Model checksum re-verification trusts marker file.** Once the verified-marker JSON file is written to `~/.cache/huggingface/murmur-model-verified-<model>.json`, subsequent launches skip sha256 re-hashing and trust the marker. If the weights are subsequently corrupted on disk (without a re-download), the corruption will not be detected until mlx-whisper fails to load them. Delete the marker file to force re-verification: `rm ~/.cache/huggingface/murmur-model-verified-<model>.json`.
 

@@ -126,3 +126,19 @@ Tests added/extended (`tests/unit/test_models.py`):
 Docs: README "Model weights" section now states that, once verified, subsequent launches resolve the cached snapshot fully offline (`local_files_only=True`) with no outbound request.
 
 Verification: `uv run pytest` → 237 passed, 1 xfailed, coverage 85.41%; `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src` all clean. Committed as `fix(models): resolve cached model snapshot offline after first verification`.
+
+## Post-ship feature — desktop `.app` + window GUI (2026-06-13)
+
+Driven by the owner wanting "an app that has a GUI on my desktop." Surfaced (and solved) the real reason always-on capture was blocked: a launchd-spawned bare framework Python (`org.python.python`) has **no `NSMicrophoneUsageDescription`**, so macOS never presents the mic prompt and the app never appears in System Settings → Microphone. A `.app` bundle that declares the usage string is the fix.
+
+**Packaging (Phase B).** `packaging/build_app.sh` builds `Murmur.app` with py2app in **alias mode** against the uv tool env (`~/.local`), which (a) avoids bundling the multi-GB torch/mlx stack and (b) keeps the runtime out of TCC-protected `~/Documents`. The bundle's `Info.plist` carries `NSMicrophoneUsageDescription` + `LSUIElement`. Two non-obvious gotchas: py2app 0.28 rejects a populated `install_requires`, which setuptools folds in from `pyproject.toml [project].dependencies` when run at the repo root — so the build runs from `packaging/` (no pyproject there); and setuptools is pinned `< 80` for py2app 0.28 compatibility. Output is ad-hoc signed and installed to `/Applications`.
+
+**Window UI (Phase A).** New PyObjC/AppKit `app/window.py` (a `MurmurWindowController` opened from a new "Open Murmur Window" menubar item) with Today / History / Settings tabs, sharing the single rumps `NSApplication` run loop and polling `StatusBoard` + transcript files on a 1 s `NSTimer`. All logic is in tested pure modules — `output/reader.py` (parse daily `.md`, list history dates) and `app/settings_io.py` (canonical `config.toml` serializer + `with_edits`). The AppKit view glue is `@objc.python_method`-decorated for non-selectors, excluded from coverage, and exempted from ruff N802 / one mypy strict flag.
+
+**Always-on (Phase C).** `murmur install-app-agent` (+ `launchd.install_app_agent`) writes a launchd plist whose `ProgramArguments` is the `Murmur.app` executable, so the login-spawned instance inherits the bundle's mic-usage declaration and can finally capture. Shares `PLIST_LABEL`, so `uninstall-agent` removes either variant.
+
+Also fixed a latent test-isolation bug the owner's real usage exposed: the `cat/copy … missing-file → exit 1` tests set `MURMUR_HOME` but never redirected `transcripts_dir`, so once a real `~/Transcripts/<today>.md` existed they failed. Now pinned to an empty tmp dir via `--config` / `config.toml`.
+
+Needs the owner's hands (cannot be automated): approve the "Murmur" mic prompt on first `open -a Murmur`; optionally a self-signed/Developer ID cert so the grant survives rebuilds.
+
+Verification: `uv run pytest` → 251 passed, 1 xfailed, coverage 85.56%; ruff check + format + mypy all clean. `Murmur.app` builds, installs to `/Applications`, and its `Info.plist` declares the mic usage string (verified). Commits: `feat(ui)`, `build(app)`, `feat(agent)`, `test(cli)`, `docs`.
