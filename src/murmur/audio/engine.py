@@ -31,7 +31,7 @@ from murmur.audio.segmenter import Segmenter
 from murmur.audio.source import AudioSource, AudioSourceError
 from murmur.audio.spool import write_segment_wav
 from murmur.control import Controller, IconState, StatusBoard
-from murmur.mac.permissions import PermissionStatus
+from murmur.mac.permissions import PermissionStatus, request_microphone_access
 
 _log = logging.getLogger(__name__)
 
@@ -55,6 +55,7 @@ class CaptureEngine(threading.Thread):
         backlog_drained: threading.Event,
         stop: threading.Event,
         device: str = "default",
+        request_mic_access: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(name="capture-engine", daemon=True)
         self._source = source
@@ -65,6 +66,9 @@ class CaptureEngine(threading.Thread):
         self._status = status
         self._notifier = notifier
         self._mic_permission = mic_permission
+        # Triggers the macOS TCC microphone prompt when status is UNDETERMINED.
+        # Injected for tests; defaults to the real AVFoundation request.
+        self._request_mic_access = request_mic_access or request_microphone_access
         self._disk_free = disk_free
         self._now = now
         self._backlog_drained = backlog_drained
@@ -87,6 +91,8 @@ class CaptureEngine(threading.Thread):
         # One-shot notification flags (avoid notification storms)
         notified_permission = False
         notified_disk = False
+        # Fire the TCC permission prompt at most once per blocked stretch.
+        requested_mic_access = False
 
         while not self._stop_event.is_set():
             try:
@@ -111,7 +117,28 @@ class CaptureEngine(threading.Thread):
                             self._flush_and_close()
                             stream_open = False
                         self._status.set_icon(IconState.ERROR)
+                        # UNDETERMINED means no TCC decision has ever been
+                        # recorded — the macOS prompt has never been shown, so
+                        # Murmur never appears in System Settings → Microphone.
+                        # Trigger the prompt once; without this the gate would
+                        # block forever waiting on a permission nothing requests.
+                        if perm == PermissionStatus.UNDETERMINED and not requested_mic_access:
+                            self._request_mic_access()
+                            requested_mic_access = True
                         if not notified_permission:
+                            if perm == PermissionStatus.UNDETERMINED:
+                                _log.warning(
+                                    "Microphone permission not yet granted; requested "
+                                    "access. Approve the macOS prompt, or grant it in "
+                                    "System Settings → Privacy & Security → Microphone. "
+                                    "Capture is blocked until granted."
+                                )
+                            else:  # DENIED / RESTRICTED — cannot re-prompt
+                                _log.warning(
+                                    "Microphone permission denied; capture is blocked. "
+                                    "Enable it in System Settings → Privacy & Security "
+                                    "→ Microphone, then restart Murmur."
+                                )
                             self._notifier.notify(  # type: ignore[attr-defined]
                                 "Murmur",
                                 "Microphone permission needed. "
@@ -120,7 +147,10 @@ class CaptureEngine(threading.Thread):
                             notified_permission = True
                         self._stop_event.wait(timeout=0.5)
                         continue
+                    if notified_permission:
+                        _log.info("Microphone permission granted; resuming capture.")
                     notified_permission = False  # reset on grant
+                    requested_mic_access = False  # reset on grant
 
                 # --- Gate 3: Disk space ---
                 if now_mono - last_disk_check >= DISK_POLL_S or not stream_open:

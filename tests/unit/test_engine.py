@@ -5,6 +5,7 @@ from __future__ import annotations
 import queue
 import threading
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -47,6 +48,7 @@ def _make_engine(
     disk_values: list[int] | None = None,
     perm_values: list[str] | None = None,
     paused: bool = False,
+    request_mic_access: Callable[[], None] | None = None,
 ) -> tuple[
     CaptureEngine,
     FakeAudioSource,
@@ -98,6 +100,7 @@ def _make_engine(
         now=clock,
         backlog_drained=backlog_drained,
         stop=stop,
+        request_mic_access=request_mic_access,
     )
     return engine, src, status, notifier, stop, clock, store
 
@@ -215,6 +218,53 @@ def test_mic_denied_blocks_and_recovers(tmp_path: Path) -> None:  # [E-1]
     assert any("Microphone" in msg for _, msg in notifier.notifications), (
         f"Expected mic-permission notification, got: {notifier.notifications}"
     )
+
+
+# R-18: UNDETERMINED permission must trigger the macOS TCC prompt exactly once.
+def test_undetermined_requests_mic_access(tmp_path: Path) -> None:  # [R-18]
+    """UNDETERMINED mic status → request_mic_access() called (triggers macOS prompt).
+
+    Regression: previously the gate blocked forever on UNDETERMINED without ever
+    requesting access, so the app never appeared in System Settings → Microphone
+    and capture never started (silent failure, R-18 violation).
+    """
+    calls: list[int] = []
+    engine, _, status, notifier, stop, _, _ = _make_engine(
+        tmp_path,
+        perm_values=["UNDETERMINED", "UNDETERMINED", "UNDETERMINED"],
+        request_mic_access=lambda: calls.append(1),
+    )
+
+    engine.start()
+    time.sleep(1.5)
+    stop.set()
+    engine.join(timeout=3.0)
+
+    # The prompt must have been requested, and exactly once (one-shot per block).
+    assert len(calls) == 1, f"Expected exactly one access request, got {len(calls)}"
+    # And the gate must surface the block, not fail silently.
+    assert any("Microphone" in msg for _, msg in notifier.notifications)
+
+
+# R-18: after the prompt is approved, the stream opens without restart.
+def test_undetermined_then_granted_opens_stream(tmp_path: Path) -> None:  # [R-18, E-1]
+    """UNDETERMINED → (prompt) → GRANTED: access requested once, then stream opens."""
+    calls: list[int] = []
+    src = FakeAudioSource(frames=[_silence_frame()] * 10)
+    engine, src, status, _, stop, _, _ = _make_engine(
+        tmp_path,
+        source=src,
+        perm_values=["UNDETERMINED", "GRANTED", "GRANTED"],
+        request_mic_access=lambda: calls.append(1),
+    )
+
+    engine.start()
+    time.sleep(1.5)
+    stop.set()
+    engine.join(timeout=3.0)
+
+    assert len(calls) == 1, "Access should be requested once on UNDETERMINED"
+    assert src.open_count >= 1, "Stream should open once permission is GRANTED"
 
 
 # E-14
