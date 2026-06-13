@@ -50,6 +50,7 @@ class MurmurApp(rumps.App):  # type: ignore[misc]
         self._transcripts_dir = transcripts_dir
         self._config_file = config_file
         self._window_controller: Any | None = None  # built lazily on first open
+        self._shutting_down = False
 
         # Menu items (order matches R-12)
         self._item_pause_resume = rumps.MenuItem("Pause", callback=self._on_pause_resume)
@@ -150,6 +151,34 @@ class MurmurApp(rumps.App):  # type: ignore[misc]
         subprocess.run(["open", str(self._transcripts_dir)], check=False)
 
     def _on_quit(self, _sender: object) -> None:
+        self._teardown()
+
+    # ------------------------------------------------------------------
+    # Shutdown
+
+    def request_shutdown(self) -> None:
+        """Tear down from off the run loop (e.g. a SIGTERM/SIGINT handler).
+
+        rumps' ``App.run()`` (the NSApplication run loop) ignores the stop
+        event, so a signal handler must actively quit it. ``terminate_`` /
+        ``quit_application`` must run on the main thread, so schedule the
+        teardown on the run loop rather than calling it from signal context.
+        """
+        from PyObjCTools import AppHelper
+
+        AppHelper.callAfter(self._teardown)
+
+    def _teardown(self) -> None:
+        """Stop the runtime, then quit the rumps loop. Main thread only.
+
+        ``rumps.quit_application()`` (NSApplication ``terminate_``) exits the
+        process from inside the run loop, so the ``finally`` in ``cli._cmd_run``
+        never runs for the menubar path — stop the runtime explicitly here. The
+        single-instance flock is released by the OS on exit (see lock.py).
+        """
+        if self._shutting_down:
+            return
+        self._shutting_down = True
         try:
             self._runtime.stop()
         except Exception as exc:

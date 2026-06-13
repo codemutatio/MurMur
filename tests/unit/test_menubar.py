@@ -46,6 +46,13 @@ def mock_rumps(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     rumps_mock.separator = "---"
     rumps_mock.quit_application = MagicMock()
     monkeypatch.setitem(sys.modules, "rumps", rumps_mock)
+    # menubar.py does `import rumps` at its own import time, so its module global
+    # is bound once and would otherwise be a stale mock from an earlier test.
+    # Rebind it to this test's mock so calls like rumps.quit_application() are
+    # observable here.
+    import murmur.app.menubar as menubar_mod
+
+    monkeypatch.setattr(menubar_mod, "rumps", rumps_mock)
     return rumps_mock
 
 
@@ -118,3 +125,61 @@ def test_pause_resume_label_flips(tmp_path: Path, mock_rumps: MagicMock) -> None
     status.set_icon(IconState.PAUSED)
     app._on_tick(None)
     assert app._item_pause_resume.title == "Resume"
+
+
+def test_teardown_stops_runtime_then_quits(tmp_path: Path, mock_rumps: MagicMock) -> None:
+    """_teardown stops the runtime and quits the rumps loop (in that order)."""
+    app, _ = _make_app(tmp_path, mock_rumps)
+
+    app._teardown()
+
+    app._runtime.stop.assert_called_once_with()
+    mock_rumps.quit_application.assert_called_once_with()
+
+
+def test_teardown_is_idempotent(tmp_path: Path, mock_rumps: MagicMock) -> None:
+    """A second teardown (e.g. duplicate signal) is a no-op."""
+    app, _ = _make_app(tmp_path, mock_rumps)
+
+    app._teardown()
+    app._teardown()
+
+    app._runtime.stop.assert_called_once_with()
+    mock_rumps.quit_application.assert_called_once_with()
+
+
+def test_on_quit_delegates_to_teardown(tmp_path: Path, mock_rumps: MagicMock) -> None:
+    """The Quit menu item runs the same teardown as the signal path."""
+    app, _ = _make_app(tmp_path, mock_rumps)
+
+    app._on_quit(None)
+
+    app._runtime.stop.assert_called_once_with()
+    mock_rumps.quit_application.assert_called_once_with()
+
+
+def test_teardown_quits_even_if_stop_raises(tmp_path: Path, mock_rumps: MagicMock) -> None:
+    """A failure in runtime.stop() must not prevent the loop from quitting."""
+    app, _ = _make_app(tmp_path, mock_rumps)
+    app._runtime.stop.side_effect = RuntimeError("boom")
+
+    app._teardown()
+
+    mock_rumps.quit_application.assert_called_once_with()
+
+
+def test_request_shutdown_schedules_teardown_on_main_loop(
+    tmp_path: Path, mock_rumps: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """request_shutdown defers teardown to the main run loop via AppHelper."""
+    from PyObjCTools import AppHelper
+
+    scheduled: list[object] = []
+    monkeypatch.setattr(AppHelper, "callAfter", lambda func, *a: scheduled.append(func))
+
+    app, _ = _make_app(tmp_path, mock_rumps)
+    app.request_shutdown()
+
+    assert scheduled == [app._teardown]
+    # Nothing torn down until the scheduled callback runs.
+    app._runtime.stop.assert_not_called()

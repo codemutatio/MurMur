@@ -182,3 +182,41 @@ def test_runtime_stop_without_start_is_safe(tmp_path: Path) -> None:
     paths = _make_paths(tmp_path)
     runtime = Runtime(config, paths)
     runtime.stop()  # Should not raise
+
+
+def test_signal_handler_sets_stop_event(tmp_path: Path) -> None:
+    """_signal_handler sets the stop event so headless wait() / capture unblock."""
+    import signal as signalmod
+
+    runtime = Runtime(_make_config(tmp_path), _make_paths(tmp_path))
+    assert not runtime._stop_event.is_set()
+    runtime._signal_handler(signalmod.SIGTERM, None)
+    assert runtime._stop_event.is_set()
+
+
+def test_signal_handler_invokes_shutdown_hook(tmp_path: Path) -> None:
+    """In menubar mode the signal handler also fires the registered teardown hook.
+
+    This is the menubar shutdown path: setting the stop event alone cannot break
+    the rumps run loop, so the hook (which quits it) must be called.
+    """
+    import signal as signalmod
+    from unittest.mock import MagicMock
+
+    runtime = Runtime(_make_config(tmp_path), _make_paths(tmp_path))
+    hook = MagicMock()
+    runtime.set_signal_shutdown_hook(hook)
+
+    runtime._signal_handler(signalmod.SIGINT, None)
+
+    assert runtime._stop_event.is_set()
+    hook.assert_called_once_with()
+
+
+def test_signal_handler_without_hook_is_safe(tmp_path: Path) -> None:
+    """Headless mode leaves the hook unset; the handler just sets the event."""
+    import signal as signalmod
+
+    runtime = Runtime(_make_config(tmp_path), _make_paths(tmp_path))
+    runtime._signal_handler(signalmod.SIGTERM, None)  # must not raise
+    assert runtime._stop_event.is_set()

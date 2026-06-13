@@ -128,6 +128,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
             runtime.wait()
         else:
             # main-thread menubar (imports here so lock is already held)
+            import rumps
+
             from murmur.app.menubar import MurmurApp
 
             app = MurmurApp(
@@ -137,6 +139,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 config.storage.transcripts_dir,
                 paths.config_file,
             )
+            # A signal alone cannot break the rumps run loop, so route SIGTERM/
+            # SIGINT to the app's teardown. rumps' run() installs its own SIGINT
+            # mach interrupt; re-install ours via before_start (which fires after
+            # that) so both signals reach the runtime handler.
+            runtime.set_signal_shutdown_hook(app.request_shutdown)
+            rumps.events.before_start.register(runtime.install_signal_handlers)
             app.run()
     finally:
         runtime.stop()

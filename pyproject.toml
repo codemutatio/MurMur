@@ -92,6 +92,8 @@ module = [
     "Foundation.*",
     "objc",
     "objc.*",
+    "PyObjCTools",
+    "PyObjCTools.*",
     "torch",
     "torch.*",
 ]

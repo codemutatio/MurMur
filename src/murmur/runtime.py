@@ -107,6 +107,11 @@ class Runtime:
         self._worker: TranscribeWorker | None = None
         self._hotkey_listener: Any = None
 
+        # Optional teardown hook invoked from the signal handler. Menubar mode
+        # registers this so SIGTERM/SIGINT break the rumps run loop (which only
+        # watching the stop event cannot do — see set_signal_shutdown_hook).
+        self._on_signal_stop: Callable[[], None] | None = None
+
     def start(self) -> None:
         """Start all threads per the startup sequence."""
         cfg = self._config
@@ -207,12 +212,10 @@ class Runtime:
             _log.warning("HotkeyListener not started (Accessibility not granted)")
         self._hotkey_listener = listener
 
-        # Install signal handlers for headless mode
-        try:
-            signal.signal(signal.SIGTERM, self._signal_handler)
-            signal.signal(signal.SIGINT, self._signal_handler)
-        except (OSError, ValueError):
-            pass  # Not on main thread or signals unavailable
+        # Install signal handlers. Headless mode waits on the stop event; menubar
+        # mode additionally registers a shutdown hook (set_signal_shutdown_hook)
+        # to break the rumps run loop.
+        self.install_signal_handlers()
 
     def stop(self, timeout: float = 10.0) -> None:
         """Stop all threads gracefully."""
@@ -244,9 +247,35 @@ class Runtime:
             _log.info("KeyboardInterrupt received, stopping")
             self._stop_event.set()
 
+    def install_signal_handlers(self) -> None:
+        """Route SIGTERM and SIGINT to _signal_handler (main thread only).
+
+        Called from start(); also re-invoked by the menubar path after rumps'
+        ``App.run()`` installs its own SIGINT mach interrupt (which would
+        otherwise stop the loop without running our teardown).
+        """
+        try:
+            signal.signal(signal.SIGTERM, self._signal_handler)
+            signal.signal(signal.SIGINT, self._signal_handler)
+        except (OSError, ValueError):
+            pass  # Not on the main thread or signals unavailable
+
+    def set_signal_shutdown_hook(self, hook: Callable[[], None] | None) -> None:
+        """Register a callback invoked from the signal handler after the stop
+        event is set. Menubar mode uses this to tear down the rumps run loop on
+        the main thread; headless mode leaves it unset (wait() returns instead).
+        """
+        self._on_signal_stop = hook
+
     def _signal_handler(self, signum: int, frame: object) -> None:
         _log.info("Signal %d received; stopping", signum)
         self._stop_event.set()
+        hook = self._on_signal_stop
+        if hook is not None:
+            try:
+                hook()
+            except Exception:  # pragma: no cover - defensive
+                _log.exception("Signal shutdown hook failed")
 
     # ------------------------------------------------------------------
 
