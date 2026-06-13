@@ -53,6 +53,16 @@ def test_cat_today_missing_file_exit_1(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
 
+    # Point transcripts_dir at an empty tmp dir; otherwise the command falls
+    # back to the real ~/Transcripts (MURMUR_HOME does not redirect it) and
+    # would find the user's actual transcript for today.
+    transcripts = tmp_path / "Transcripts"
+    config_path = home / "config.toml"
+    config_path.write_text(
+        f'[storage]\ntranscripts_dir = "{transcripts}"\n',
+        encoding="utf-8",
+    )
+
     result = subprocess.run(
         [sys.executable, "-m", "murmur", "cat", "today"],
         env=_murmur_home_env(home),

@@ -21,22 +21,34 @@ def test_help_exits(capsys: pytest.CaptureFixture[str]) -> None:
     assert exc_info.value.code == 0
 
 
+def _empty_transcripts_config(tmp_path: Path) -> Path:
+    """Write a config pointing transcripts_dir at an empty tmp dir.
+
+    Without this the command falls back to the real ~/Transcripts and would
+    find the user's actual transcript for today (MURMUR_HOME does not redirect
+    transcripts_dir).
+    """
+    transcripts = tmp_path / "Transcripts"  # intentionally empty: no file for today
+    config = tmp_path / "config.toml"
+    config.write_text(f'[storage]\ntranscripts_dir = "{transcripts}"\n', encoding="utf-8")
+    return config
+
+
 def test_cat_missing_file_exit_1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """cat today exits 1 when no transcript file exists."""
-    home = tmp_path / "home"
-    monkeypatch.setenv("MURMUR_HOME", str(home))
+    monkeypatch.setenv("MURMUR_HOME", str(tmp_path / "home"))
+    config = _empty_transcripts_config(tmp_path)
 
-    # Override transcripts_dir to tmp_path so no real file is present
-    result = main(["cat", "today"])
+    result = main(["cat", "today", "--config", str(config)])
     assert result == 1
 
 
 def test_copy_missing_file_exit_1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """copy today exits 1 when no transcript file exists."""
-    home = tmp_path / "home"
-    monkeypatch.setenv("MURMUR_HOME", str(home))
+    monkeypatch.setenv("MURMUR_HOME", str(tmp_path / "home"))
+    config = _empty_transcripts_config(tmp_path)
 
-    result = main(["copy", "today"])
+    result = main(["copy", "today", "--config", str(config)])
     assert result == 1
 
 
