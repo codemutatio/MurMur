@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from murmur.mac.launchd import PLIST_LABEL, install_agent, uninstall_agent
+from murmur.mac.launchd import PLIST_LABEL, install_agent, install_app_agent, uninstall_agent
 
 
 def test_install_agent_murmur_not_found(tmp_path: Path) -> None:
@@ -45,6 +45,34 @@ def test_install_agent_writes_plist(tmp_path: Path) -> None:
     call_args = mock_run.call_args_list
     bootstrap_calls = [c for c in call_args if "bootstrap" in str(c)]
     assert len(bootstrap_calls) >= 1, "launchctl bootstrap should have been called"
+
+
+def test_install_app_agent_missing_bundle_raises(tmp_path: Path) -> None:
+    """install_app_agent raises when the Murmur.app executable is absent."""
+    with pytest.raises(RuntimeError, match="Murmur.app executable not found"):
+        install_app_agent(app_path=tmp_path / "Nope.app", plist_dir=tmp_path)
+
+
+def test_install_app_agent_points_plist_at_bundle(tmp_path: Path) -> None:
+    """install_app_agent writes a plist whose ProgramArguments is the .app executable."""
+    app = tmp_path / "Murmur.app"
+    exe = app / "Contents" / "MacOS" / "Murmur"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("#!/bin/sh\n")  # stand-in executable
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
+        plist_path = install_app_agent(app_path=app, plist_dir=tmp_path)
+
+    assert plist_path == tmp_path / f"{PLIST_LABEL}.plist"
+    content = plist_path.read_text()
+    assert str(exe) in content
+    # It runs the bundle executable directly — not `murmur run`.
+    assert "<string>run</string>" not in content
+    bootstrap_calls = [c for c in mock_run.call_args_list if "bootstrap" in str(c)]
+    assert len(bootstrap_calls) >= 1
 
 
 def test_uninstall_agent_removes_plist(tmp_path: Path) -> None:

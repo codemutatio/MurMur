@@ -48,7 +48,18 @@ def _build_parser() -> argparse.ArgumentParser:
     bench_p.add_argument("--config", type=Path, metavar="PATH")
 
     # murmur install-agent
-    sub.add_parser("install-agent", help="Install launchd user agent.")
+    sub.add_parser("install-agent", help="Install launchd user agent (bare murmur run).")
+
+    # murmur install-app-agent
+    app_agent_p = sub.add_parser(
+        "install-app-agent", help="Install launchd agent for the Murmur.app bundle."
+    )
+    app_agent_p.add_argument(
+        "--app",
+        type=Path,
+        metavar="PATH",
+        help="Path to Murmur.app (default: /Applications/Murmur.app).",
+    )
 
     # murmur uninstall-agent
     sub.add_parser("uninstall-agent", help="Uninstall launchd user agent.")
@@ -76,6 +87,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_bench(args)
     if args.command == "install-agent":
         return _cmd_install_agent()
+    if args.command == "install-app-agent":
+        return _cmd_install_app_agent(args)
     if args.command == "uninstall-agent":
         return _cmd_uninstall_agent()
 
@@ -221,6 +234,19 @@ def _cmd_install_agent() -> int:
 
     plist_path = install_agent()
     print(f"Installed: {plist_path}")
+    return 0
+
+
+def _cmd_install_app_agent(args: argparse.Namespace) -> int:
+    from murmur.mac.launchd import install_app_agent
+
+    app = getattr(args, "app", None)
+    try:
+        plist_path = install_app_agent(app) if app is not None else install_app_agent()
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(f"Installed app agent: {plist_path}")
     return 0
 
 
