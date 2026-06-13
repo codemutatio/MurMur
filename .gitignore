@@ -23,6 +23,7 @@ htmlcov/
 # macOS
 .DS_Store
 *.swp
+*.app
 
 # Murmur runtime (never commit sensitive runtime artifacts)
 *.lock
