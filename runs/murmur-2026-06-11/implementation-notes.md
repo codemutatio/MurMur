@@ -109,3 +109,20 @@ Tests added (`tests/unit/test_engine.py`): `test_undetermined_requests_mic_acces
 Verification: `uv run pytest` → 235 passed, 1 xfailed, coverage 84.82%; ruff check + format + mypy all clean.
 
 Known residual (best-effort, noted not silent): `requestAccessForMediaType_completionHandler_` is invoked from the capture-engine (non-main) thread in a CLI with no AppKit run loop; the TCC prompt is presented out-of-process by macOS so this is expected to work, but if the prompt does not appear the WARNING log now tells the user exactly how to grant access manually. A future hardening could marshal the request to the main thread or trigger it during a stream-open attempt.
+
+## Post-ship fix — startup network call on cached model (privacy-constraint violation, 2026-06-13)
+
+Surfaced from the `murmur run` startup log on the target machine: every launch — even with weights fully cached and the verified-marker present — emitted `httpx: HTTP Request: GET https://huggingface.co/api/models/mlx-community/whisper-large-v3-mlx/revision/main`. This violates the spec Constraints privacy rule ("the default configuration must never make an outbound network call during normal operation"; first-run model download is the only sanctioned exception).
+
+Root cause (`src/murmur/transcribe/models.py`): `ModelManager.ensure()` called `self._download(repo)` *unconditionally, before* the marker check. `_download` calls `huggingface_hub.snapshot_download`, which resolves the remote revision over the network even when every file is already cached. The marker only short-circuited the sha256 re-hash — not the network round-trip — so the "fast startup" path still phoned home on every run.
+
+Fix: `ensure()` now checks the marker *first*. When the marker exists it resolves the snapshot via a new `_resolve_offline(repo)` helper that calls `snapshot_download(local_files_only=True)` — guaranteeing huggingface_hub makes no outbound request (no remote revision resolution). On success it returns the cached path with zero network I/O; the marker-skips-rehash behaviour is preserved. The marker is not blindly trusted: if the local snapshot is missing (`LocalEntryNotFoundError`/`FileNotFoundError`), `_resolve_offline` returns `None` and `ensure()` falls back to the full network download → sha256 verify → marker rewrite path. First-run (no marker) behaviour is unchanged.
+
+Tests added/extended (`tests/unit/test_models.py`):
+- `test_marker_present_resolves_offline_no_network` — marker present ⇒ `snapshot_download` is invoked exactly once with `local_files_only=True` and the fake `HfApi.model_info` is never called (proves no network-touching collaborator runs).
+- `test_marker_present_but_snapshot_missing_falls_back` — marker present but cache gone ⇒ offline resolve raises `LocalEntryNotFoundError`, ensure() re-downloads (no `local_files_only`) and re-verifies.
+- `test_marker_skips_rehash` — updated to patch `_resolve_offline` (the collaborator the marker path now uses) instead of `_download`; still asserts verification is skipped.
+
+Docs: README "Model weights" section now states that, once verified, subsequent launches resolve the cached snapshot fully offline (`local_files_only=True`) with no outbound request.
+
+Verification: `uv run pytest` → 237 passed, 1 xfailed, coverage 85.41%; `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src` all clean. Committed as `fix(models): resolve cached model snapshot offline after first verification`.

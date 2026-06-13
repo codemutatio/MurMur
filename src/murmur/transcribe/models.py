@@ -48,8 +48,15 @@ class ModelManager:
     def ensure(self, model: str) -> str:
         """Ensure *model* is available locally. Returns the snapshot path.
 
-        If a verified-marker file exists, the sha256 check is skipped (fast
-        startup). Otherwise: download → sha256 verify every LFS file →
+        If a verified-marker file exists, the snapshot is resolved purely from
+        the local cache with no network call (the sha256 check is also skipped
+        for fast startup). This upholds the privacy constraint: the default
+        configuration makes no outbound request during normal operation — the
+        first-run download is the only sanctioned exception. The marker is not
+        blindly trusted: if the local snapshot has gone missing, ensure() falls
+        back to a network download and re-verifies.
+
+        Otherwise (first run): download → sha256 verify every LFS file →
         write marker.
 
         Raises:
@@ -60,13 +67,18 @@ class ModelManager:
             raise ValueError(f"Unknown model '{model}'. Known models: {list(MODEL_REPOS)}")
 
         repo = MODEL_REPOS[model]
-        snapshot_path = self._download(repo)
-
         marker = self._marker_path(model)
-        if marker.exists():
-            _log.debug("Model %s already verified (marker present)", model)
-            return snapshot_path
 
+        if marker.exists():
+            cached = self._resolve_offline(repo)
+            if cached is not None:
+                _log.debug("Model %s already verified (marker present); resolved offline", model)
+                return cached
+            _log.warning(
+                "Model %s marker present but local snapshot missing; re-downloading", model
+            )
+
+        snapshot_path = self._download(repo)
         _log.info("Verifying model weights for %s ...", model)
         self._verify(repo, snapshot_path)
         marker.write_text(json.dumps({"model": model, "repo": repo, "verified": True}))
@@ -101,6 +113,28 @@ class ModelManager:
 
         result: str = snapshot_download(**kwargs)
         return result
+
+    def _resolve_offline(self, repo: str) -> str | None:
+        """Resolve a fully-cached snapshot path without any network call.
+
+        Returns the local snapshot path, or None if the snapshot is not fully
+        cached. ``local_files_only=True`` guarantees huggingface_hub makes no
+        outbound request — in particular it skips resolving the remote revision
+        over the network, which snapshot_download otherwise does even when every
+        file is already cached.
+        """
+        from huggingface_hub import snapshot_download
+        from huggingface_hub.errors import LocalEntryNotFoundError
+
+        kwargs: dict[str, Any] = {"repo_id": repo, "local_files_only": True}
+        if self._cache_dir is not None:
+            kwargs["cache_dir"] = str(self._cache_dir)
+
+        try:
+            return str(snapshot_download(**kwargs))
+        except (LocalEntryNotFoundError, FileNotFoundError) as exc:
+            _log.debug("No local snapshot for %s (%s); will download", repo, exc)
+            return None
 
     def _verify(self, repo: str, snapshot_path: str) -> None:
         """SHA256-check every LFS file in *snapshot_path* against HF metadata."""

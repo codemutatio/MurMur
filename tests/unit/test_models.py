@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from huggingface_hub.errors import LocalEntryNotFoundError
 
 from murmur.transcribe.models import MODEL_REPOS, ChecksumError, ModelManager
 
@@ -127,14 +128,86 @@ def test_marker_skips_rehash(tmp_path: Path) -> None:
     api = MagicMock()  # Should NOT be called if marker present
     manager = ModelManager(cache_dir=tmp_path, api=api)
 
+    # With the marker present the snapshot is resolved offline; verification (and
+    # thus the network-touching HfApi) must never run.
     with patch(
-        "murmur.transcribe.models.ModelManager._download",
+        "murmur.transcribe.models.ModelManager._resolve_offline",
         return_value=str(snapshot),
     ):
         result = manager.ensure("large-v3")
 
     assert result == str(snapshot)
     api.model_info.assert_not_called()  # Verify was skipped
+
+
+def test_marker_present_resolves_offline_no_network(tmp_path: Path) -> None:
+    """With the marker present, ensure() resolves the snapshot via
+    snapshot_download(local_files_only=True) and never touches the network.
+
+    Proves the privacy constraint (spec Constraints): no outbound call on a
+    normal startup once the model has been verified on a prior run. The fake
+    network collaborator (HfApi.model_info) must never be invoked, and the
+    downloader must be asked for a local-only resolution.
+    """
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+
+    marker = tmp_path / "murmur-model-verified-large-v3.json"
+    marker.write_text(json.dumps({"model": "large-v3", "verified": True}))
+
+    api = MagicMock()  # network verification collaborator — must stay untouched
+    manager = ModelManager(cache_dir=tmp_path, api=api)
+
+    fake_snapshot_download = MagicMock(return_value=str(snapshot))
+    with patch("huggingface_hub.snapshot_download", fake_snapshot_download):
+        result = manager.ensure("large-v3")
+
+    assert result == str(snapshot)
+    # The downloader was consulted exactly once, in offline mode.
+    fake_snapshot_download.assert_called_once()
+    _, kwargs = fake_snapshot_download.call_args
+    assert kwargs.get("local_files_only") is True, (
+        "cached resolution must pass local_files_only=True so huggingface_hub "
+        "makes no outbound request (no remote revision resolution)"
+    )
+    # No network verification path was entered.
+    api.model_info.assert_not_called()
+
+
+def test_marker_present_but_snapshot_missing_falls_back(tmp_path: Path) -> None:
+    """If the marker exists but the local snapshot is gone, ensure() falls back
+    to a network download and re-verifies — the marker is not blindly trusted
+    when the cache is missing."""
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    content = b"recovered weights"
+    (snapshot / "weights.bin").write_bytes(content)
+    expected_sha = _sha256(content)
+
+    marker = tmp_path / "murmur-model-verified-large-v3.json"
+    marker.write_text(json.dumps({"model": "large-v3", "verified": True}))
+
+    api = _make_fake_api([_make_sibling("weights.bin", expected_sha)])
+    manager = ModelManager(cache_dir=tmp_path, api=api)
+
+    calls: list[dict[str, object]] = []
+
+    def fake_snapshot_download(**kwargs: object) -> str:
+        calls.append(kwargs)
+        if kwargs.get("local_files_only"):
+            raise LocalEntryNotFoundError("snapshot not cached")
+        return str(snapshot)
+
+    with patch("huggingface_hub.snapshot_download", side_effect=fake_snapshot_download):
+        result = manager.ensure("large-v3")
+
+    assert result == str(snapshot)
+    # Offline attempt first (local_files_only=True), then the network fallback.
+    assert len(calls) == 2
+    assert calls[0].get("local_files_only") is True
+    assert "local_files_only" not in calls[1]
+    # Re-verification ran against HF metadata on the re-downloaded snapshot.
+    api.model_info.assert_called_once()
 
 
 def test_progress_reported(tmp_path: Path) -> None:

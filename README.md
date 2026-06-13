@@ -314,6 +314,8 @@ Weights are downloaded from Hugging Face on first use via `huggingface_hub.snaps
 
 After download, sha256 checksums are verified against HF LFS metadata. A marker file is written to `~/.cache/huggingface/murmur-model-verified-<model>.json` so subsequent launches skip re-hashing (fast startup). See Known Limitations for the caveats on this.
 
+Once the marker is present, subsequent launches resolve the cached snapshot **fully offline** (`local_files_only=True`) — no outbound request is made, so a verified install satisfies the no-network-during-normal-operation privacy constraint. The first-run download is the only sanctioned network call. If the local snapshot is ever missing despite the marker, the next launch falls back to a network re-download and re-verifies.
+
 ---
 
 ## State and data locations
