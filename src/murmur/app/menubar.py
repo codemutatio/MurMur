@@ -41,18 +41,22 @@ class MurmurApp(rumps.App):  # type: ignore[misc]
         status: StatusBoard,
         runtime: Any,
         transcripts_dir: Path,
+        config_file: Path | None = None,
     ) -> None:
         super().__init__("Murmur", title=IconState.RECORDING.value)
         self._controller = controller
         self._status = status
         self._runtime = runtime
         self._transcripts_dir = transcripts_dir
+        self._config_file = config_file
+        self._window_controller: Any | None = None  # built lazily on first open
 
         # Menu items (order matches R-12)
         self._item_pause_resume = rumps.MenuItem("Pause", callback=self._on_pause_resume)
         self._item_pause_30 = rumps.MenuItem("Pause for 30 min", callback=self._on_pause_30)
         self._item_pause_1h = rumps.MenuItem("Pause for 1 h", callback=self._on_pause_1h)
         self._item_pause_day = rumps.MenuItem("Pause for rest of day", callback=self._on_pause_day)
+        self._item_open_window = rumps.MenuItem("Open Murmur Window", callback=self._on_open_window)
         self._item_open_today = rumps.MenuItem(
             "Open today's transcript", callback=self._on_open_today
         )
@@ -69,6 +73,7 @@ class MurmurApp(rumps.App):  # type: ignore[misc]
             self._item_pause_1h,
             self._item_pause_day,
             rumps.separator,
+            self._item_open_window,
             self._item_open_today,
             self._item_open_folder,
             rumps.separator,
@@ -115,6 +120,21 @@ class MurmurApp(rumps.App):  # type: ignore[misc]
 
     def _on_pause_day(self, _sender: object) -> None:
         self._controller.pause_rest_of_day()
+
+    def _on_open_window(self, _sender: object) -> None:
+        # Built lazily: the NSWindow needs the NSApplication that rumps creates
+        # in run(), so we cannot construct it at __init__ time.
+        if self._window_controller is None:
+            from murmur.app.window import make_window_controller
+            from murmur.output.reader import TranscriptReader
+
+            self._window_controller = make_window_controller(
+                controller=self._controller,
+                status=self._status,
+                reader=TranscriptReader(self._transcripts_dir),
+                config_file=self._config_file,
+            )
+        self._window_controller.show()
 
     def _on_open_today(self, _sender: object) -> None:
         today = date.today()

@@ -122,6 +122,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 runtime.status,
                 runtime,
                 config.storage.transcripts_dir,
+                paths.config_file,
             )
             app.run()
     finally:

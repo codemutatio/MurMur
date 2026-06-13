@@ -80,6 +80,7 @@ def test_menu_items_and_disabled_notes(tmp_path: Path, mock_rumps: MagicMock) ->
     assert app._item_pause_30 is not None
     assert app._item_pause_1h is not None
     assert app._item_pause_day is not None
+    assert app._item_open_window is not None
     assert app._item_open_today is not None
     assert app._item_open_folder is not None
     assert app._item_notes is not None
