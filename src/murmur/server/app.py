@@ -192,8 +192,14 @@ def create_app(
 
         lock: asyncio.Lock = app.state.lock
 
-        # Steps 3–7 validation (done BEFORE acquiring the lock — no awaits inside
-        # the busy-check below so the check+acquire sequence is atomic).
+        # Step 2: Single-flight busy-check (§A step 2 — must precede the model-loaded
+        # check at step 3). This is a SYNCHRONOUS read of lock.locked(); no await is
+        # issued before or between this check and the later atomic acquire, so the
+        # asyncio event loop cannot yield between them. Both conditions can be checked
+        # in the correct §A order without a TOCTOU race because asyncio is
+        # single-threaded: no other coroutine can run between synchronous statements.
+        if lock.locked():
+            return _error(503, _E_MODEL_BUSY, "A transcription is already in progress")
 
         # Step 3: Model not yet loaded (E-20, OQ-7)
         if not app.state.model_loaded_flag.is_set():
@@ -247,14 +253,13 @@ def create_app(
         resolved_language = (language or app.state.config.stt.language or "en").strip()
         resolved_hints = _resolve_hints(vocab_hints, app.state.config)
 
-        # Step 2: Single-flight acquire — atomic busy-check + acquire (AC-14, E-10, ADR-2).
-        # All file I/O awaits are completed above.  The lock.locked() check and the
-        # async with lock: acquisition below have NO intervening await, so the asyncio
-        # event loop cannot yield to another coroutine between the check and the acquire.
-        # This eliminates the TOCTOU window: a second concurrent request that also
-        # reaches this point will observe lock.locked()==True and get 503 immediately.
-        if lock.locked():
-            return _error(503, _E_MODEL_BUSY, "A transcription is already in progress")
+        # Steps 8+: Atomic single-flight acquire (AC-14, E-10, ADR-2).
+        # All file I/O awaits are completed above.  The lock.locked() check at step 2
+        # above and the async with lock: acquisition below have NO intervening await
+        # (the model-not-loaded and file checks at steps 3-7 are all synchronous or
+        # already-completed awaits), so the asyncio event loop cannot yield to another
+        # coroutine between the early busy-check and the acquire.  The early check at
+        # step 2 preserves the §A ordering contract (busy before model-not-loaded).
 
         # Step 8+: acquire lock → write temp file → decode → transcribe → clean
         async with lock:

@@ -63,6 +63,10 @@ ignore = ["E501"]
 # window.py uses PyObjC selector method names (initWithDeps_, onTick_, …) which
 # must be camelCase to bridge to Objective-C; N802 (snake_case) does not apply.
 "src/murmur/app/window.py" = ["N802"]
+# Test function names may include identifiers like CVE numbers or spec clause labels
+# (e.g. test_python_multipart_version__CVE_2024_53981) which require uppercase.
+# N802 (function name should be lowercase) is intentionally suppressed for test files.
+"tests/**" = ["N802"]
 
 [tool.mypy]
 python_version = "3.11"

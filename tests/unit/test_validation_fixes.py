@@ -1,17 +1,23 @@
-"""Tests added during validation fix-list iteration 1.
+"""Tests added during validation fix-list iterations 1 and 2.
 
 Each test is tagged with the fix-list item it proves.
 """
 
 from __future__ import annotations
 
+import asyncio
 import io
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
+from httpx import ASGITransport, AsyncClient
 
+from murmur.server.app import create_app
 from murmur.server.config import ServerConfig, ServerSettings
+from tests.fakes import FakeTranscriber
 
 _TOKEN = "fix-list-test-token"
 _AUTH = {"Authorization": f"Bearer {_TOKEN}"}
@@ -153,3 +159,78 @@ def test_token_redact_filter_on_format_string() -> None:  # [CR-10]
     assert "[REDACTED]" in record.getMessage()
     # args must be cleared so a second getMessage() call doesn't re-expand the token
     assert record.args == ()
+
+
+# ---------------------------------------------------------------------------
+# G-5 / SR-1 — python-multipart resolved version ≥ 0.0.18 (CVE-2024-53981)
+# ---------------------------------------------------------------------------
+
+
+def test_python_multipart_version__CVE_2024_53981() -> None:  # [G-5, SR-1, F-9]
+    """python-multipart resolved version must be ≥ 0.0.18 to fix CVE-2024-53981.
+
+    The pyproject.toml constraint is python-multipart>=0.0.18.  This test asserts
+    the installed version satisfies that minimum, so any regression (e.g. a lockfile
+    downgrade or an incorrect constraint) is caught automatically.
+    """
+    from importlib.metadata import version as pkg_version
+
+    from packaging.version import Version
+
+    installed = pkg_version("python-multipart")
+    assert Version(installed) >= Version("0.0.18"), (
+        f"python-multipart {installed} is below 0.0.18 — CVE-2024-53981 is unpatched"
+    )
+
+
+# ---------------------------------------------------------------------------
+# G-5 / SR-3 — tempfile suffix sanitized for filenames containing '/' (path injection)
+# ---------------------------------------------------------------------------
+
+
+def test_sanitized_tempfile_suffix__SR3() -> None:  # [G-5, SR-3]
+    """A filename containing '/' must be sanitized to its basename before use as
+    a mkstemp suffix, preventing FileNotFoundError / directory traversal.
+
+    The fix in app.py uses Path(filename).name to strip directory components.
+    This test calls POST /transcribe with a '/' in the filename and asserts:
+      - The response is NOT a 500 Internal Server Error (which would indicate
+        mkstemp received a path separator in the suffix argument).
+      - The response is a legitimate application-level error (400/415/422),
+        meaning the request was processed through the validation pipeline normally.
+    """
+    flag = threading.Event()
+    flag.set()
+    app = create_app(
+        FakeTranscriber(),
+        _TOKEN,
+        ServerConfig(),
+        model_loaded_flag=flag,
+        decode_fn=MagicMock(return_value=np.zeros(16000, dtype=np.float32)),
+    )
+
+    async def _run() -> int:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post(
+                "/transcribe",
+                headers=_AUTH,
+                files={
+                    "file": (
+                        "../../etc/evil.m4a",   # filename with path separators
+                        io.BytesIO(b"fake-audio"),
+                        "audio/m4a",
+                    )
+                },
+            )
+            return resp.status_code
+
+    status = asyncio.run(_run())
+    # Must NOT be 500 — a 500 would indicate the unsanitized suffix crashed mkstemp
+    assert status != 500, (
+        "POST /transcribe returned 500 with a slash-containing filename — "
+        "SR-3 path-sanitization fix may be missing (suffix contained '/')"
+    )
+    # Must be a valid HTTP error or success — not a server crash
+    assert status in {200, 400, 401, 413, 415, 422}, (
+        f"Unexpected status {status} for slash-in-filename upload"
+    )

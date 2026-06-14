@@ -103,6 +103,71 @@ async def test_concurrent_transcribe_503_model_busy() -> None:  # [AC-14, E-10, 
 
 
 # ---------------------------------------------------------------------------
+# G-1 / §A precedence — model_busy wins over model_not_loaded when both hold
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_model_busy_beats_model_not_loaded__G1_spec_A() -> None:  # [G-1, §A step-2 before step-3]
+    """§A requires step-2 (model_busy) to fire BEFORE step-3 (model_not_loaded).
+
+    When the lock is held AND the model flag is unset, the response must be
+    503 model_busy — not 503 model_not_loaded.  This test holds the lock by
+    running a slow transcription, then fires a second request while the model
+    flag is simultaneously cleared, and asserts the second request gets
+    model_busy (not model_not_loaded).
+    """
+    flag = threading.Event()
+    flag.set()  # model loaded initially so the first request gets through
+    transcriber = FakeTranscriber()
+    app = create_app(
+        transcriber,
+        _TOKEN,
+        ServerConfig(),
+        model_loaded_flag=flag,
+        decode_fn=_make_slow_decode(0.3),
+    )
+    audio_bytes = b"fake-audio-data"
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        # Start a slow transcription to hold the lock
+        first_task = asyncio.create_task(
+            client.post(
+                "/transcribe",
+                headers=_AUTH,
+                files={"file": ("test.m4a", io.BytesIO(audio_bytes), "audio/m4a")},
+            )
+        )
+
+        # Let the first request enter the lock
+        await asyncio.sleep(0.05)
+
+        # Now clear the model flag — both conditions hold simultaneously
+        flag.clear()
+
+        # A second request arrives: lock IS held AND model flag IS unset
+        # §A step-2 (busy) must win over step-3 (model_not_loaded)
+        resp2 = await client.post(
+            "/transcribe",
+            headers=_AUTH,
+            files={"file": ("test.m4a", io.BytesIO(audio_bytes), "audio/m4a")},
+        )
+
+        await first_task
+
+    assert resp2.status_code == 503, (
+        f"Expected 503 for concurrent request, got {resp2.status_code}: {resp2.text}"
+    )
+    error_code = resp2.json().get("error_code")
+    assert error_code == "model_busy", (
+        f"§A step-2 (model_busy) must beat step-3 (model_not_loaded) when both hold; "
+        f"got error_code={error_code!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # AC-13 / E-11 — /health stays fast while transcription lock is held
 # ---------------------------------------------------------------------------
 
