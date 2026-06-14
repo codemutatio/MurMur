@@ -6,16 +6,12 @@ Each test is tagged with the fix-list item it proves.
 from __future__ import annotations
 
 import io
-import sys
-import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import numpy as np
 import pytest
 
-from murmur.server.config import ServerConfig, ServerSettings, load_server_config
-from tests.fakes import FakeTranscriber
+from murmur.server.config import ServerConfig, ServerSettings
 
 _TOKEN = "fix-list-test-token"
 _AUTH = {"Authorization": f"Bearer {_TOKEN}"}
@@ -43,10 +39,9 @@ def test_startup_rejects_non_loopback_host(tmp_path: Path) -> None:  # [F-10, SR
         ),
         patch.object(server_main, "_configure_logging"),
         patch("sys.stderr", captured_stderr),
-        patch("sys.exit", side_effect=SystemExit) as mock_exit,
+        patch("sys.exit", side_effect=SystemExit) as mock_exit,pytest.raises(SystemExit)
     ):
-        with pytest.raises(SystemExit):
-            server_main.main()
+        server_main.main()
 
     mock_exit.assert_called_once_with(1)
     stderr_output = captured_stderr.getvalue()

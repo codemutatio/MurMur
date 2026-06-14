@@ -7,7 +7,6 @@ of iteration 1. All tests are deterministic (no sleeps, no network, no device).
 from __future__ import annotations
 
 import io
-import sys
 import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -66,10 +65,10 @@ def test_startup_token_absent_exits_with_exact_message(tmp_path: Path) -> None: 
         patch.object(server_main, "_configure_logging"),
         patch("sys.stderr", captured_stderr),
         patch("sys.exit", side_effect=SystemExit) as mock_exit,
+        patch("murmur.lock.SingleInstanceLock"),
+        pytest.raises(SystemExit),
     ):
-        with patch("murmur.lock.SingleInstanceLock"):
-            with pytest.raises(SystemExit):
-                server_main.main()
+        server_main.main()
 
     # sys.exit(1) must have been called
     mock_exit.assert_called_once_with(1)
@@ -211,6 +210,7 @@ def test_25mb_boundary_is_binary_mb_not_decimal() -> None:  # [AC-8, E-1, E-2, t
 def test_verify_token_impl_uses_compare_digest() -> None:  # [AC-15, test-engineer]
     """verify_token must call hmac.compare_digest, not the == operator."""
     import inspect
+
     import murmur.server.token as token_mod
 
     source = inspect.getsource(token_mod.verify_token)
