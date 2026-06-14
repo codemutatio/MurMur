@@ -27,6 +27,12 @@ _TOKEN_ABSENT_MSG = (
     "Set MURMUR_SERVER_TOKEN env var or add to Keychain."
 )
 
+_LOOPBACK_ADDRS: frozenset[str] = frozenset({"127.0.0.1", "::1"})
+_HOST_REJECT_MSG = (
+    "server.toml: host must be 127.0.0.1 or ::1 (R-8). "
+    "Refusing to bind to non-loopback interface."
+)
+
 
 def main() -> None:
     """Start the Murmur server."""
@@ -63,6 +69,14 @@ def main() -> None:
     if not token:
         _log.critical(_TOKEN_ABSENT_MSG)
         print(_TOKEN_ABSENT_MSG, file=sys.stderr)
+        sys.exit(1)
+
+    # ------------------------------------------------------------------
+    # 2b. Validate host is loopback-only (R-8, F-10, SR-2)
+    # ------------------------------------------------------------------
+    if config.server.host not in _LOOPBACK_ADDRS:
+        _log.critical(_HOST_REJECT_MSG)
+        print(_HOST_REJECT_MSG, file=sys.stderr)
         sys.exit(1)
 
     # ------------------------------------------------------------------

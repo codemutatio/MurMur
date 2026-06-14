@@ -90,8 +90,11 @@ class _TokenRedactFilter(logging.Filter):
         self._token = token
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if self._token in record.getMessage():
-            record.msg = record.msg.replace(self._token, "[REDACTED]")
+        # Operate on getMessage() (which expands %s args) so the token in args is caught,
+        # then store the fully-formatted+redacted string in msg and clear args (CR-10).
+        formatted = record.getMessage()
+        if self._token in formatted:
+            record.msg = formatted.replace(self._token, "[REDACTED]")
             record.args = ()
         return True
 
@@ -189,9 +192,8 @@ def create_app(
 
         lock: asyncio.Lock = app.state.lock
 
-        # Step 2: Single-flight check (AC-14, E-10) — immediate 503, no queuing
-        if lock.locked():
-            return _error(503, _E_MODEL_BUSY, "A transcription is already in progress")
+        # Steps 3–7 validation (done BEFORE acquiring the lock — no awaits inside
+        # the busy-check below so the check+acquire sequence is atomic).
 
         # Step 3: Model not yet loaded (E-20, OQ-7)
         if not app.state.model_loaded_flag.is_set():
@@ -245,6 +247,15 @@ def create_app(
         resolved_language = (language or app.state.config.stt.language or "en").strip()
         resolved_hints = _resolve_hints(vocab_hints, app.state.config)
 
+        # Step 2: Single-flight acquire — atomic busy-check + acquire (AC-14, E-10, ADR-2).
+        # All file I/O awaits are completed above.  The lock.locked() check and the
+        # async with lock: acquisition below have NO intervening await, so the asyncio
+        # event loop cannot yield to another coroutine between the check and the acquire.
+        # This eliminates the TOCTOU window: a second concurrent request that also
+        # reaches this point will observe lock.locked()==True and get 503 immediately.
+        if lock.locked():
+            return _error(503, _E_MODEL_BUSY, "A transcription is already in progress")
+
         # Step 8+: acquire lock → write temp file → decode → transcribe → clean
         async with lock:
             return await _run_transcription(
@@ -263,7 +274,10 @@ def create_app(
         hints: list[str],
     ) -> Response:
         """Inner transcription logic — called only when the lock is held."""
-        suffix = f"_{filename}" if filename else ".audio"
+        # SR-3: Strip directory components from client-supplied filename to prevent
+        # mkstemp raising FileNotFoundError on filenames containing '/' characters.
+        safe_name = Path(filename).name if filename else ""
+        suffix = f"_{safe_name}" if safe_name else ".audio"
         tmp_fd, tmp_path_str = tempfile.mkstemp(suffix=suffix)
         tmp_path = Path(tmp_path_str)
 

@@ -49,16 +49,26 @@ def _make_app(
 
 
 @pytest.mark.asyncio
-async def test_concurrent_transcribe_503_model_busy() -> None:  # [AC-14, E-10]
-    """While one transcription holds the lock, a second POST gets 503 model_busy."""
-    app = _make_app(decode_fn=_make_slow_decode(0.3))
+async def test_concurrent_transcribe_503_model_busy() -> None:  # [AC-14, E-10, F-3]
+    """Two genuinely concurrent POSTs: exactly one 503 model_busy, never two transcriptions.
+
+    No artificial sleep between the two requests — both are fired as concurrent asyncio
+    tasks and allowed to race.  The fixed code's atomic lock.locked()+async-with sequence
+    (no await between them) guarantees exactly one 503; the other completes normally.
+    The test asserts:
+      - Exactly one response is 503 model_busy
+      - The other is 200 (transcription ran once, not twice)
+      - The fake transcriber ran at most once (never two concurrent transcriptions)
+    """
+    transcriber = FakeTranscriber()
+    app = _make_app(decode_fn=_make_slow_decode(0.2), transcriber=transcriber)
 
     audio_bytes = b"fake-audio-data"
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        # Start the first request (will hold the lock for ~0.3 s)
+        # Fire both requests concurrently with no sleep between them
         task1 = asyncio.create_task(
             client.post(
                 "/transcribe",
@@ -66,24 +76,30 @@ async def test_concurrent_transcribe_503_model_busy() -> None:  # [AC-14, E-10]
                 files={"file": ("test.m4a", io.BytesIO(audio_bytes), "audio/m4a")},
             )
         )
-
-        # Give the first request a moment to acquire the lock
-        await asyncio.sleep(0.05)
-
-        # Second request should get 503 model_busy immediately
-        resp2 = await client.post(
-            "/transcribe",
-            headers=_AUTH,
-            files={"file": ("test.m4a", io.BytesIO(audio_bytes), "audio/m4a")},
+        task2 = asyncio.create_task(
+            client.post(
+                "/transcribe",
+                headers=_AUTH,
+                files={"file": ("test.m4a", io.BytesIO(audio_bytes), "audio/m4a")},
+            )
         )
 
-        resp1 = await task1
+        resp1, resp2 = await asyncio.gather(task1, task2)
 
-    # First request should succeed (or at least not 503)
-    assert resp1.status_code == 200, f"First request failed: {resp1.text}"
-    # Second request must get 503 model_busy
-    assert resp2.status_code == 503, f"Expected 503, got {resp2.status_code}: {resp2.text}"
-    assert resp2.json()["error_code"] == "model_busy"
+    statuses = {resp1.status_code, resp2.status_code}
+    # Exactly one 503 and one 200 (or at least one 503)
+    assert 503 in statuses, (
+        f"Expected exactly one 503 model_busy; got {resp1.status_code} and {resp2.status_code}"
+    )
+    # Identify which response is which
+    busy_resp = resp1 if resp1.status_code == 503 else resp2
+    assert busy_resp.json()["error_code"] == "model_busy", (
+        f"503 response does not have model_busy error code: {busy_resp.text}"
+    )
+    # The transcriber must have run at most once — never two concurrent transcriptions
+    assert len(transcriber.calls) <= 1, (
+        f"Transcriber ran {len(transcriber.calls)} times — two transcriptions ran concurrently"
+    )
 
 
 # ---------------------------------------------------------------------------
