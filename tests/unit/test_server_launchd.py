@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import plistlib
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -220,3 +221,66 @@ def test_uninstall_swallows_bootout_error(tmp_path: Path) -> None:
         mock_run.side_effect = subprocess.CalledProcessError(1, "launchctl bootout")
         # Should not raise
         uninstall_server_agent(plist_dir=plist_dir)
+
+
+# ---------------------------------------------------------------------------
+# deploy fix — Homebrew PATH in EnvironmentVariables (live bug)
+# ---------------------------------------------------------------------------
+
+
+def test_environment_variables_path_includes_homebrew__deploy(tmp_path: Path) -> None:
+    """Rendered plist EnvironmentVariables.PATH includes /opt/homebrew/bin.
+
+    Parses the plist with plistlib (not string-match) and verifies:
+      - EnvironmentVariables dict is present
+      - PATH covers Apple-Silicon Homebrew (/opt/homebrew/bin) and Intel
+        Homebrew (/usr/local/bin) so ffmpeg resolves under launchd [deploy]
+      - KeepAlive is True
+      - ProgramArguments contains caffeinate
+      - plutil -lint passes
+    """
+    python_bin = Path("/usr/local/bin/python3")
+    log_path = tmp_path / "murmur-server.log"
+    plist_path = tmp_path / f"{SERVER_PLIST_LABEL}.plist"
+
+    content = render_server_plist(python_bin, log_path)
+    plist_path.write_text(content, encoding="utf-8")
+
+    # --- plutil lint --------------------------------------------------------
+    lint = subprocess.run(
+        ["plutil", "-lint", str(plist_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert lint.returncode == 0, (
+        f"plutil -lint failed after adding EnvironmentVariables:\n"
+        f"{lint.stdout}\n{lint.stderr}"
+    )
+
+    # --- parse with plistlib -----------------------------------------------
+    parsed = plistlib.loads(content.encode())
+
+    assert "EnvironmentVariables" in parsed, (
+        "EnvironmentVariables key missing from rendered plist"
+    )
+    env_vars = parsed["EnvironmentVariables"]
+    assert "PATH" in env_vars, "PATH key missing from EnvironmentVariables"
+
+    path_value: str = env_vars["PATH"]
+    path_dirs = path_value.split(":")
+
+    assert "/opt/homebrew/bin" in path_dirs, (
+        f"/opt/homebrew/bin (Apple-Silicon Homebrew) not in PATH: {path_value!r}"
+    )
+    assert "/usr/local/bin" in path_dirs, (
+        f"/usr/local/bin (Intel Homebrew) not in PATH: {path_value!r}"
+    )
+
+    # --- KeepAlive still true -----------------------------------------------
+    assert parsed.get("KeepAlive") is True, "KeepAlive must remain True"
+
+    # --- caffeinate still in ProgramArguments --------------------------------
+    prog_args: list[str] = parsed.get("ProgramArguments", [])
+    assert any("caffeinate" in a for a in prog_args), (
+        "caffeinate missing from ProgramArguments"
+    )

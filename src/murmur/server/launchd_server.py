@@ -25,6 +25,12 @@ _DEFAULT_LAUNCH_AGENTS = Path("~/Library/LaunchAgents").expanduser()
 # Single-instance PID-file path (OQ-8 belt — launchd is primary; PID file is secondary)
 SERVER_PID_FILE = Path("/tmp/murmur-server.pid")
 
+# PATH injected into the launchd agent environment.  launchd starts agents
+# with a minimal PATH that excludes Homebrew, so ffmpeg, tailscale, and any
+# other Homebrew-installed binaries would fail to resolve without this.
+# /opt/homebrew/bin = Apple-Silicon Homebrew; /usr/local/bin = Intel Homebrew.
+_LAUNCHD_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
 
 def render_server_plist(
     python_bin: Path,
@@ -67,6 +73,11 @@ def render_server_plist(
     <array>
 {args_xml}
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{_LAUNCHD_PATH}</string>
+    </dict>
     <key>RunAtLoad</key>
     <{"true" if run_at_load else "false"}/>
     <key>KeepAlive</key>
