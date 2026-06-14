@@ -20,6 +20,14 @@ import sys
 import threading
 from pathlib import Path
 
+import numpy as np
+from fastapi import FastAPI
+
+from murmur.server.config import ServerConfig
+from murmur.transcribe.base import TranscriptionResult
+from murmur.transcribe.local import MlxWhisperTranscriber
+from murmur.transcribe.models import ModelManager
+
 _log = logging.getLogger(__name__)
 
 _TOKEN_ABSENT_MSG = (
@@ -92,62 +100,25 @@ def main() -> None:
         sys.exit(1)
 
     # ------------------------------------------------------------------
-    # 4. Background model load (sets flag; /health reads flag non-blocking)
+    # 4. Build app with placeholder transcriber; background thread wires
+    #    the real transcriber once the model snapshot is resolved.
     # ------------------------------------------------------------------
     model_loaded_flag = threading.Event()
-
-    def _load_model() -> None:
-        try:
-            from murmur.transcribe.models import ModelManager
-
-            manager = ModelManager()
-            model_ref = manager.ensure(config.stt.model)
-            _log.info("Model ready: %s", model_ref)
-            model_loaded_flag.set()
-        except Exception as exc:
-            _log.error("Model load failed: %s", exc)
-            # model_loaded_flag stays unset; /health returns model_loaded: false.
-
-    threading.Thread(target=_load_model, daemon=True).start()
-
-    # ------------------------------------------------------------------
-    # 5. Build app with production transcriber
-    # ------------------------------------------------------------------
-    from murmur.transcribe.local import MlxWhisperTranscriber
-
-    # The transcriber is constructed lazily once the model flag is set.
-    # For the app factory we pass a placeholder that won't be called until
-    # the model is loaded (model_loaded_flag guards Step 3 in the endpoint).
-    try:
-        transcriber = MlxWhisperTranscriber(config.stt.model)
-    except RuntimeError as exc:
-        _log.warning("Transcriber construction deferred: %s", exc)
-        # On non-Apple-Silicon or CI — still create a stub so /health works.
-        import numpy as np
-
-        from murmur.transcribe.base import TranscriptionResult
-
-        class _StubTranscriber:
-            def transcribe(
-                self,
-                audio: np.ndarray,
-                *,
-                language: str,
-                initial_prompt: str | None,
-            ) -> TranscriptionResult:
-                raise RuntimeError("Transcriber not available on this platform.")
-
-        transcriber = _StubTranscriber()  # type: ignore[assignment]
-
     app = create_app(
-        transcriber,
+        _PlaceholderTranscriber(),
         token,
         config,
         model_loaded_flag=model_loaded_flag,
     )
 
+    threading.Thread(
+        target=_build_and_wire_transcriber,
+        args=(app, config, model_loaded_flag),
+        daemon=True,
+    ).start()
+
     # ------------------------------------------------------------------
-    # 6. Serve (loopback only — R-8)
+    # 5. Serve (loopback only — R-8)
     # ------------------------------------------------------------------
     _log.info(
         "Starting Murmur server on %s:%d",
@@ -163,6 +134,62 @@ def main() -> None:
         )
     finally:
         lock.release()
+
+
+class _PlaceholderTranscriber:
+    """Not-ready transcriber used only while the model is loading.
+
+    model_loaded_flag gates /transcribe so this method is never called in
+    normal operation.  It raises unconditionally to make any accidental call
+    fail loudly rather than silently.
+    """
+
+    def transcribe(
+        self,
+        audio: np.ndarray,
+        *,
+        language: str,
+        initial_prompt: str | None,
+    ) -> TranscriptionResult:
+        raise RuntimeError(
+            "Model not yet loaded — transcription request reached the placeholder "
+            "transcriber, which should not happen while model_loaded_flag is unset."
+        )
+
+
+def _build_and_wire_transcriber(
+    app: FastAPI,
+    config: ServerConfig,
+    model_loaded_flag: threading.Event,
+) -> None:
+    """Resolve the model snapshot, build MlxWhisperTranscriber, wire it into
+    app.state, then set model_loaded_flag.
+
+    Runs in a daemon thread so uvicorn can start immediately.  /health remains
+    responsive during load; /transcribe returns 503 model_not_loaded until the
+    flag is set.
+
+    On non-Apple-Silicon or any other failure: logs the error and leaves the
+    flag unset so the server degrades gracefully (503 on /transcribe,
+    model_loaded:false on /health) rather than crashing.
+    """
+    try:
+        # Resolve the logical model name (e.g. "large-v3") to the local
+        # snapshot directory that mlx_whisper actually accepts as
+        # path_or_hf_repo.  Using the logical name directly causes mlx to
+        # attempt a HuggingFace lookup for a repo literally named "large-v3",
+        # which fails with "Repository Not Found" (live bug).
+        manager = ModelManager()
+        model_ref = manager.ensure(config.stt.model)
+        _log.info("Model ready: %s", model_ref)
+
+        transcriber = MlxWhisperTranscriber(model_ref)
+        app.state.transcriber = transcriber
+        model_loaded_flag.set()
+    except Exception as exc:
+        _log.error("Model load failed: %s", exc)
+        # model_loaded_flag stays unset; /health returns model_loaded:false
+        # and /transcribe returns 503 model_not_loaded.
 
 
 def _configure_logging(log_path_str: str) -> None:
