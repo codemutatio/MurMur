@@ -257,4 +257,57 @@ Step 2 (model_busy) still fires before step 3 (model_not_loaded). The new struct
 
 ## Documentation
 
-(doc-writer appends here)
+**Stage 6 — doc-writer, 2026-06-14**
+
+### Files created / updated
+
+#### Server repo — `/Users/faithomojola/Documents/MurMur` (branch `feature/murmur-mobile-2026-06-14`)
+
+| File | Action | What changed |
+|------|--------|-------------|
+| `src/murmur/server/README.md` | Updated | Corrected `tailscale serve` command (was `--bg 127.0.0.1:8080`, now `--bg https / http://127.0.0.1:8080` per plan §5.3); added `MURMUR_SERVER_CONFIG` env var; added full `server.toml` schema table; added Concurrency design section documenting the R3-1 as-built atomic acquire pattern; added ffmpeg section; added `log_path` in Logs section; expanded error-code table with all 10 codes. |
+| `CHANGELOG.md` | Updated | Added `[1.0.0] — 2026-06-14` entry in Keep a Changelog format, describing all new server capabilities, the version bump, and test counts. |
+| `README.md` | Updated | Added "Murmur Server (mobile transcription API)" section with a pointer to `src/murmur/server/README.md`, placed in the documentation section before the Manual verification procedures heading. |
+| `runs/murmur-mobile-2026-06-14/adr.md` | Updated | Added R3-1 addendum paragraph to ADR-2 describing the as-built atomic single-flight design: `if lock.locked()` / `await lock.acquire()` with no intervening await, lock held during upload read, proving test `test_concurrent_transcribe_race_proof__R3_1_AC14`. |
+
+#### Android repo — `/Users/faithomojola/Documents/MurmurMobile` (branch `main`)
+
+| File | Action | What changed |
+|------|--------|-------------|
+| `README.md` | Updated | Replaced the 6-step setup checklist with the complete 9-step one-time setup checklist from PRD §9; fixed incorrect launchd install command (was `uv run python -m murmur.server --install-agent` which does not exist — replaced with the correct `uv run python -c "from murmur.server.launchd_server import install_server_agent; install_server_agent()"`); expanded Retry/edge-cases section; updated coverage table with final numbers (92.2% overall); added MV runbook summary table with explicit "do not interpret as passed" note. |
+| `docs/manual-verification.md` | No change needed | Verified complete and accurate: MV-20, MV-54..MV-61, MV-26-B all present with setup, procedure, and unambiguous pass conditions. All 9 human-on-device ACs covered. |
+
+### Commands executed to verify samples
+
+All commands run in the MurMur repo on branch `feature/murmur-mobile-2026-06-14`.
+
+| Command | Result |
+|---------|--------|
+| `uv run python -c "from murmur.server.config import load_server_config; ..."` | Confirmed defaults: host=127.0.0.1, port=8080, max_upload_mb=25, model=large-v3, first hints=('Rivy','Yassir','Refendr'). Warning logged for missing file. |
+| `uv run python -c "from murmur.server.launchd_server import render_server_plist; ..."` | Rendered plist with Label=com.jay.murmur-server, KeepAlive=true, RunAtLoad=true, ProgramArguments=[caffeinate,-i,...,-m,murmur.server]. |
+| `plutil -lint <rendered plist>` | Exit 0: OK |
+| `uv run python -c "from murmur.server.token import get_server_token; ..."` | Confirmed: env var read correctly; returns None when neither env nor Keychain has the token. |
+| `uv run python -c "from murmur.server.token import verify_token; ..."` | Confirmed constant-time comparison: True/True → True; True/False → False; None/True → False. |
+| `uv run python -c "from importlib.metadata import version; print(version('murmur'))"` | `1.0.0` confirmed. |
+| `uv run python -m murmur.server --install-agent 2>&1` | Confirmed: no `--install-agent` flag; the module immediately tries to start the server. This is the key discrepancy documented below. |
+
+**Commands that are deploy-time / manual steps (cannot run in this environment):**
+- `tailscale serve --bg https / http://127.0.0.1:8080` — requires Tailscale installed and authenticated; labeled as deploy-time in docs.
+- `curl ... https://<machine>.<tailnet>.ts.net/health` — requires live Tailscale network.
+- `adb install ...` — requires physical Pixel connected.
+- All MV-xx steps — require physical Pixel + live Mac + Tailscale.
+
+### Discrepancies found (plan vs. code)
+
+| # | Where | Plan said | Code does | Severity | Disposition |
+|---|-------|-----------|-----------|----------|-------------|
+| D-1 | Android README (from T-20) | `uv run python -m murmur.server --install-agent` | `python -m murmur.server` accepts no CLI flags; it immediately loads config and starts the server. There is no `--install-agent` flag. | Major (broken command in docs) | Fixed in Android README: replaced with correct `uv run python -c "from murmur.server.launchd_server import install_server_agent; install_server_agent()"`. Flagged for orchestrator. |
+| D-2 | Server README (from T-9) | `tailscale serve --bg https / http://127.0.0.1:8080` (plan §5.3, prd §5.3) | `tailscale serve --bg 127.0.0.1:8080` (old v1 syntax) | Minor (deploy-time only; both may work depending on Tailscale version, but plan syntax is canonical) | Fixed in server README to use the plan-specified form. |
+
+### Out-of-scope items confirmed not documented
+
+- `/clean` endpoint: not mentioned as available (noted as "parsed and ignored" in config only).
+- Silence-chunking: not mentioned.
+- Notes history search: not mentioned.
+- `retention_days` auto-prune: not mentioned.
+- On-device Whisper: not mentioned.

@@ -7,6 +7,28 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [1.0.0] — 2026-06-14
+
+### Added
+
+- **Murmur Server** (`src/murmur/server/`) — FastAPI HTTP service wrapping the existing `MlxWhisperTranscriber` for use by Murmur Mobile (Android).
+  - `GET /health` — bearer-token-gated liveness and readiness check. Returns `{"status","model_loaded","model","version"}`. Never acquires the transcription lock; responds < 500 ms regardless of in-progress transcription (AC-1 through AC-3, AC-13).
+  - `POST /transcribe` — multipart upload (m4a/aac/wav/mp3/ogg/opus, max 25 MB). Decodes audio via `ffmpeg` subprocess to float32 mono 16 kHz PCM, transcribes with `MlxWhisperTranscriber` (large-v3), applies `build_initial_prompt()` vocab hints, runs `clean_result()` hallucination guard, returns JSON `{text, segments, language, duration_sec, model, engine}` (AC-4 through AC-18).
+  - Single-flight `asyncio.Lock` with atomic acquire — concurrent `POST /transcribe` receives immediate 503 `model_busy`; no waiter queue (AC-14, ADR-2, R3-1 fix).
+  - 10-code error registry: `unauthorized`, `model_busy`, `model_not_loaded`, `missing_file`, `empty_file`, `file_too_large`, `unsupported_media_type`, `audio_decode_failed`, `transcription_failed`, `no_speech_detected`.
+  - Bearer token read from `MURMUR_SERVER_TOKEN` env or macOS Keychain (`murmur-server-token`); constant-time `hmac.compare_digest` comparison; token never logged (AC-15, AC-17, R-7).
+  - `server.toml` config: `[server]`, `[stt]`, `[clean]` (parsed and ignored); missing/malformed → defaults + warning, no crash (AC-16).
+  - launchd user agent (`com.jay.murmur-server.plist`): `KeepAlive=true`, `RunAtLoad=true`, `caffeinate -i` power assertion, single-instance PID-file belt at `/tmp/murmur-server.pid` (AC-19, R-16, R-17).
+  - Server binds `127.0.0.1` only; exposed via `tailscale serve --bg https / http://127.0.0.1:8080` (R-8, R-9).
+  - Structured logs to `~/Library/Logs/murmur-server.log`; audio bytes and transcript text never logged (R-10, R-18).
+  - 358 tests (including 3 added in post-escalation R3-1 fix); 86.76% coverage on new server code; ruff and mypy clean.
+
+### Changed
+
+- Bumped package version `0.1.0` → `1.0.0` to reflect the first production-ready release shipping the server component. The `/health` `version` field reports `"1.0.0"`.
+
+---
+
 ## [0.1.0] — 2026-06-12
 
 Initial release.

@@ -428,6 +428,21 @@ uv run murmur bench recording.wav
 
 ---
 
+## Murmur Server (mobile transcription API)
+
+`src/murmur/server/` is a FastAPI HTTP service that exposes the existing `mlx-whisper`
+transcription stack as a REST API for **Murmur Mobile** (Android). It runs as a separate
+launchd agent (`com.jay.murmur-server`), bound to `127.0.0.1:8080`, and is reached from
+the phone over Tailscale HTTPS.
+
+See [`src/murmur/server/README.md`](src/murmur/server/README.md) for:
+- Full API reference (`GET /health`, `POST /transcribe`, all error codes)
+- `server.toml` schema and bearer-token setup
+- launchd install and `tailscale serve` setup
+- Concurrency design (single-flight lock, `/health` lock-free)
+
+---
+
 ## Manual verification procedures
 
 See [`docs/manual-verification.md`](docs/manual-verification.md) for scripted procedures covering:
