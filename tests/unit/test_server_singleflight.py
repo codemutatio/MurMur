@@ -7,7 +7,7 @@ import io
 import threading
 import time
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -204,4 +204,125 @@ async def test_health_not_blocked_by_lock() -> None:  # [AC-13, E-11]
     assert resp_health.status_code == 200
     assert elapsed < 0.5, (
         f"GET /health took {elapsed:.3f}s while lock was held (expected < 0.5s)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# R3-1 / H-1 — proving test: genuinely triggers the TOCTOU race window
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_concurrent_transcribe_race_proof__R3_1_AC14() -> None:  # [R3-1, H-1, AC-14, E-10]
+    """Structural proof that the atomic acquire-or-503 closes the TOCTOU race.
+
+    The old code had:
+        if lock.locked(): return 503        ← step 2 (sync, cheap)
+        ...
+        await file.read(1)                  ← step 5: event-loop YIELD HERE
+        await file.read(65536) in a loop    ← step 6: event-loop YIELD HERE
+        ...
+        async with lock: ...               ← actual acquire (queues, not rejects)
+
+    Two concurrent tasks could BOTH pass the step-2 check (lock free at that
+    instant), then BOTH yield at the file.read awaits while neither held the
+    lock, and BOTH reach the `async with lock:` — where asyncio.Lock queues
+    the second one instead of rejecting it, causing two transcriptions to run
+    serially (breaking the single-flight guarantee: the second request got a
+    200, not a 503).
+
+    To make the yield deterministic and prove the race without relying on
+    scheduling coincidence, we patch starlette's UploadFile.read to insert
+    `await asyncio.sleep(0)` before returning data.  This forces the event
+    loop to switch to the OTHER task at exactly the step-5/6 yield point —
+    the scenario the old code could not handle.
+
+    The new code uses `if lock.locked(): return 503` immediately followed
+    (no await between them) by `await lock.acquire()` at step 2.  When the
+    lock is free, `await lock.acquire()` acquires it without yielding to any
+    other coroutine (CPython's asyncio.Lock returns immediately when
+    uncontested).  From that point the lock is held for the rest of the
+    handler, so any concurrent request reaching the `lock.locked()` check
+    sees True and returns 503 before any file I/O occurs.  There is no
+    window where a second request can slip past.
+
+    This test WOULD FAIL on the old code (the second task would receive 200
+    because it queued on `async with lock:` and eventually ran) and PASSES on
+    the new code (the second task receives 503 immediately at step 2).
+    """
+    # A slow transcriber so the first request holds the lock during the test.
+    slow_transcriber = FakeTranscriber()
+
+    flag = threading.Event()
+    flag.set()
+
+    app = create_app(
+        slow_transcriber,
+        _TOKEN,
+        ServerConfig(),
+        model_loaded_flag=flag,
+        decode_fn=_make_slow_decode(0.3),  # holds the lock for 0.3 s
+    )
+
+    # Patch UploadFile.read to inject a guaranteed event-loop yield before
+    # returning any data.  This replicates the exact yield point that made the
+    # old code racy: both requests will have called wait_for(lock.acquire(), 0)
+    # and the FIRST one will have acquired the lock; the SECOND one sees the
+    # lock already held and must return 503 — it must NOT reach the upload read.
+    #
+    # We wrap the real read so real data is still returned (Starlette still
+    # needs to parse the multipart body for the first request).
+    import starlette.datastructures as _sd
+
+    _original_read = _sd.UploadFile.read
+
+    async def _yielding_read(self: _sd.UploadFile, size: int = -1) -> bytes:
+        await asyncio.sleep(0)  # force event-loop context switch
+        return await _original_read(self, size)
+
+    audio_bytes = b"fake-audio-data-for-race-proof"
+
+    with patch.object(_sd.UploadFile, "read", _yielding_read):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            # Launch both requests as concurrent tasks with no sleep ordering.
+            task1 = asyncio.create_task(
+                client.post(
+                    "/transcribe",
+                    headers=_AUTH,
+                    files={"file": ("race.m4a", io.BytesIO(audio_bytes), "audio/m4a")},
+                )
+            )
+            task2 = asyncio.create_task(
+                client.post(
+                    "/transcribe",
+                    headers=_AUTH,
+                    files={"file": ("race.m4a", io.BytesIO(audio_bytes), "audio/m4a")},
+                )
+            )
+
+            resp1, resp2 = await asyncio.gather(task1, task2)
+
+    statuses = {resp1.status_code, resp2.status_code}
+
+    # With the atomic fix: exactly one 503 model_busy (step-2 rejects the
+    # second request before it ever reads the upload).
+    assert 503 in statuses, (
+        f"Race-proof test: expected one 503 model_busy, got "
+        f"{resp1.status_code} and {resp2.status_code}. "
+        f"If both are 200, the TOCTOU race is still present."
+    )
+    busy_resps = [r for r in (resp1, resp2) if r.status_code == 503]
+    assert len(busy_resps) == 1, (
+        f"Expected exactly ONE 503; got {len(busy_resps)}. Statuses: {statuses}"
+    )
+    assert busy_resps[0].json()["error_code"] == "model_busy", (
+        f"503 body did not carry model_busy: {busy_resps[0].text}"
+    )
+
+    # The transcriber must have run exactly once — never two transcriptions.
+    assert len(slow_transcriber.calls) == 1, (
+        f"Transcriber ran {len(slow_transcriber.calls)} times; "
+        "single-flight guarantee broken."
     )

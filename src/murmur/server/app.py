@@ -192,77 +192,84 @@ def create_app(
 
         lock: asyncio.Lock = app.state.lock
 
-        # Step 2: Single-flight busy-check (§A step 2 — must precede the model-loaded
-        # check at step 3). This is a SYNCHRONOUS read of lock.locked(); no await is
-        # issued before or between this check and the later atomic acquire, so the
-        # asyncio event loop cannot yield between them. Both conditions can be checked
-        # in the correct §A order without a TOCTOU race because asyncio is
-        # single-threaded: no other coroutine can run between synchronous statements.
+        # Step 2: Atomic single-flight acquire-or-503 (AC-14, E-10, ADR-2, §A step 2).
+        #
+        # These two statements are genuinely atomic — no await expression appears
+        # between them, so the asyncio event loop cannot yield to any other coroutine
+        # between "is the lock free?" and "I hold the lock":
+        #
+        #   1. lock.locked() — synchronous; checks the flag without any I/O.
+        #   2. await lock.acquire() — when the lock is FREE, CPython's asyncio.Lock
+        #      sets _locked=True and returns True immediately without suspending (i.e.
+        #      the await does NOT yield to the event loop).  When the lock IS held,
+        #      this line is never reached (we returned 503 above).
+        #
+        # Result: the first request atomically owns the lock from this point forward.
+        # Every subsequent concurrent request sees lock.locked()==True at statement 1
+        # and returns 503 model_busy before reading the upload — closing the TOCTOU
+        # window that existed when the busy-check and the acquire were separated by
+        # real await file.read() calls.
+        #
+        # §A order is preserved: step 2 (model_busy) fires before step 3
+        # (model_not_loaded) and all subsequent steps run under the held lock.
         if lock.locked():
             return _error(503, _E_MODEL_BUSY, "A transcription is already in progress")
+        await lock.acquire()
 
-        # Step 3: Model not yet loaded (E-20, OQ-7)
-        if not app.state.model_loaded_flag.is_set():
-            return _error(503, _E_MODEL_NOT_LOADED, "Model is not yet loaded")
+        try:
+            # Step 3: Model not yet loaded (E-20, OQ-7)
+            if not app.state.model_loaded_flag.is_set():
+                return _error(503, _E_MODEL_NOT_LOADED, "Model is not yet loaded")
 
-        # Step 4: file field absent (E-42)
-        if file is None:
-            return _error(400, _E_MISSING_FILE, "No file field in request")
+            # Step 4: file field absent (E-42)
+            if file is None:
+                return _error(400, _E_MISSING_FILE, "No file field in request")
 
-        # Step 5: file zero bytes (E-43) — read first byte to check
-        first_chunk = await file.read(1)
-        if not first_chunk:
-            return _error(400, _E_EMPTY_FILE, "Uploaded file is empty")
+            # Step 5: file zero bytes (E-43) — read first byte to check
+            first_chunk = await file.read(1)
+            if not first_chunk:
+                return _error(400, _E_EMPTY_FILE, "Uploaded file is empty")
 
-        # Read remaining bytes for size check
-        max_bytes = int(app.state.config.server.max_upload_mb) * 1024 * 1024
-        body = bytearray(first_chunk)
-        while True:
-            chunk = await file.read(65536)
-            if not chunk:
-                break
-            body.extend(chunk)
-            # Step 6: size > limit (AC-8, E-1, E-2) — checked incrementally
-            if len(body) > max_bytes:
+            # Read remaining bytes for size check
+            max_bytes = int(app.state.config.server.max_upload_mb) * 1024 * 1024
+            body = bytearray(first_chunk)
+            while True:
+                chunk = await file.read(65536)
+                if not chunk:
+                    break
+                body.extend(chunk)
+                # Step 6: size > limit (AC-8, E-1, E-2) — checked incrementally
+                if len(body) > max_bytes:
+                    return _error(
+                        413,
+                        _E_FILE_TOO_LARGE,
+                        f"File exceeds maximum upload size of "
+                        f"{app.state.config.server.max_upload_mb} MB",
+                    )
+
+            # Step 7: MIME / extension check (AC-10, E-5, E-6)
+            filename: str = file.filename or ""
+            content_type_file = file.content_type or ""
+            ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+            ext_ok = ext in _ACCEPTED_EXTENSIONS
+            mime_ok = any(content_type_file.startswith(m) for m in _ACCEPTED_MIMES)
+            # E-5: application/octet-stream accepted when the file extension is valid
+            octet_stream_ok = content_type_file == "application/octet-stream" and ext_ok
+
+            if not (ext_ok or mime_ok or octet_stream_ok):
                 return _error(
-                    413,
-                    _E_FILE_TOO_LARGE,
-                    f"File exceeds maximum upload size of "
-                    f"{app.state.config.server.max_upload_mb} MB",
+                    415,
+                    _E_UNSUPPORTED_MEDIA,
+                    f"Unsupported media type: {content_type_file!r} (extension: {ext!r}). "
+                    f"Accepted: m4a, aac, wav, mp3, ogg, opus",
                 )
 
-        # Step 7: MIME / extension check (AC-10, E-5, E-6)
-        filename: str = file.filename or ""
-        content_type_file = file.content_type or ""
-        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+            # Resolve language and vocab_hints
+            resolved_language = (language or app.state.config.stt.language or "en").strip()
+            resolved_hints = _resolve_hints(vocab_hints, app.state.config)
 
-        ext_ok = ext in _ACCEPTED_EXTENSIONS
-        mime_ok = any(content_type_file.startswith(m) for m in _ACCEPTED_MIMES)
-        # E-5: application/octet-stream accepted when the file extension is valid
-        octet_stream_ok = content_type_file == "application/octet-stream" and ext_ok
-
-        if not (ext_ok or mime_ok or octet_stream_ok):
-            return _error(
-                415,
-                _E_UNSUPPORTED_MEDIA,
-                f"Unsupported media type: {content_type_file!r} (extension: {ext!r}). "
-                f"Accepted: m4a, aac, wav, mp3, ogg, opus",
-            )
-
-        # Resolve language and vocab_hints before acquiring the lock
-        resolved_language = (language or app.state.config.stt.language or "en").strip()
-        resolved_hints = _resolve_hints(vocab_hints, app.state.config)
-
-        # Steps 8+: Atomic single-flight acquire (AC-14, E-10, ADR-2).
-        # All file I/O awaits are completed above.  The lock.locked() check at step 2
-        # above and the async with lock: acquisition below have NO intervening await
-        # (the model-not-loaded and file checks at steps 3-7 are all synchronous or
-        # already-completed awaits), so the asyncio event loop cannot yield to another
-        # coroutine between the early busy-check and the acquire.  The early check at
-        # step 2 preserves the §A ordering contract (busy before model-not-loaded).
-
-        # Step 8+: acquire lock → write temp file → decode → transcribe → clean
-        async with lock:
+            # Steps 8+: lock is already held — write temp file → decode → transcribe → clean
             return await _run_transcription(
                 app=app,
                 audio_bytes=bytes(body),
@@ -270,6 +277,8 @@ def create_app(
                 language=resolved_language,
                 hints=resolved_hints,
             )
+        finally:
+            lock.release()
 
     async def _run_transcription(
         app: FastAPI,

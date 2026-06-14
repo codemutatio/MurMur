@@ -195,6 +195,66 @@ Classes NOT measured by JaCoCo (Robolectric-tested only, documented deviation B-
 - `./gradlew jacocoTestReport`: engine 89.4%, overall 92.2% (both ≥80%)
 - `./gradlew lintDebug`: BUILD SUCCESSFUL (0 errors)
 
+## Post-escalation fix (H-1 / R3-1)
+
+**Date:** 2026-06-14  
+**Fix-list:** `runs/murmur-mobile-2026-06-14/fix-list-3.md`  
+**Scope:** `src/murmur/server/app.py` and `tests/unit/test_server_singleflight.py` only.
+
+### The bug (confirmed by orchestrator)
+
+`app.py POST /transcribe` had a TOCTOU race: the busy-check `if lock.locked()` was at line 201 (step 2), but the atomic acquire `async with lock:` was at line 265 (step 8). Between them were `await file.read(1)` (line 213) and a loop of `await file.read(65536)` (line 221). Each `await` is a genuine event-loop yield point. Two concurrent requests could both pass the busy-check (seeing the lock free), both yield at the file-read awaits, and both reach the acquire — where `asyncio.Lock` queues them (FIFO) instead of rejecting the second. Both transcriptions would run serially with both returning 200, breaking AC-14 / E-10 / ADR-2.
+
+The iteration-2 fix comment claiming "no intervening await" was factually wrong: the awaits were there and were real.
+
+### The fix
+
+Replaced the `if lock.locked(): return 503` + `async with lock:` separated pattern with:
+
+```python
+if lock.locked():
+    return _error(503, _E_MODEL_BUSY, ...)
+await lock.acquire()
+try:
+    # steps 3-8+ including all file.read() awaits
+    ...
+finally:
+    lock.release()
+```
+
+**Why this is genuinely atomic:** There is no `await` expression between `lock.locked()` and `await lock.acquire()`. In CPython's asyncio, `asyncio.Lock.acquire()` when the lock is uncontested sets `_locked=True` and returns `True` immediately — the coroutine completes synchronously without suspending, meaning the event loop does NOT yield to any other coroutine. Verified empirically (see shell test in build log). No other coroutine can be scheduled between two non-await Python statements.
+
+From the moment `await lock.acquire()` returns, the lock is held. Any subsequent concurrent request reaching `lock.locked()` sees `True` and returns 503 immediately — before reading the upload. The TOCTOU window is closed.
+
+**Design rationale (ADR-2 addendum, single-user Tailscale-only context):** The lock is now held during the upload read (file.read awaits) in addition to the decode/transcribe steps. This is acceptable: Murmur is a single-user, single-flight server on a private Tailscale network. Only one transcription runs at a time by design; a busy server 503s immediately (before reading any upload bytes), which is exactly what the Android WorkManager wants. The additional lock coverage during upload-read has no practical cost.
+
+### The proving test
+
+**Test name:** `test_concurrent_transcribe_race_proof__R3_1_AC14` in `tests/unit/test_server_singleflight.py`
+
+**How it triggers the yield deterministically:** The test patches `starlette.datastructures.UploadFile.read` to prepend `await asyncio.sleep(0)` before returning data. This forces a guaranteed event-loop context switch at the exact point where the old code had its race window (the `file.read()` awaits after the busy-check but before the lock acquire).
+
+**Why it would FAIL on the old code:** Both tasks would see `lock.locked()==False` at step 2 (the lock is free initially), both would proceed, both would yield at `await file.read()` (patched sleep), and both would reach `async with lock:` — where asyncio.Lock queues them. Both would get 200. The test assertion `assert 503 in statuses` would fail because `statuses == {200}`.
+
+**Why it PASSES on the new code:** Task A atomically acquires the lock at step 2 (no yield between `lock.locked()` and `await lock.acquire()`). When Task B subsequently runs and checks `lock.locked()`, it's `True` and B returns 503 before any file I/O. The test assertion holds.
+
+**Evidence of old-code failure:** Confirmed via an isolated asyncio simulation (see build log) showing the old pattern (`if lock.locked()` + yield + `async with lock:`) produces two 200 responses, while the new pattern (`if lock.locked()` + `await lock.acquire()` with no yield between) produces one 200 and one 503.
+
+### AC-13 (health not blocked)
+
+`/health` never acquires `_lock` — it reads `model_loaded_flag.is_set()` (a threading.Event). The lock is held during upload read + decode + transcribe, but `run_in_executor` offloads the blocking work to a thread pool, keeping the event loop free. `test_health_not_blocked_by_lock` continues to pass (health response < 500 ms while a 1-second transcription holds the lock).
+
+### §A order
+
+Step 2 (model_busy) still fires before step 3 (model_not_loaded). The new structure acquires the lock at step 2, then checks model_loaded_flag at step 3 (under the lock). `test_model_busy_beats_model_not_loaded__G1_spec_A` continues to pass.
+
+### Final test suite status
+
+- `uv run pytest`: **358 passed** (+1 new: `test_concurrent_transcribe_race_proof__R3_1_AC14`), 0 failed, 1 xfailed, 86.76% coverage (threshold 80%)
+- `uv run ruff check`: all checks passed
+- `uv run mypy src/murmur`: no issues found in 45 source files
+- Android repo: not touched.
+
 ## Documentation
 
 (doc-writer appends here)
