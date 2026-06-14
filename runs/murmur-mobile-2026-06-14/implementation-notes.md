@@ -159,6 +159,42 @@ Classes NOT measured by JaCoCo (Robolectric-tested only, documented deviation B-
 - `./gradlew assembleDebug`: BUILD SUCCESSFUL
 - `./gradlew lintDebug`: BUILD SUCCESSFUL (0 errors)
 
+## Validation Iteration 2 Fixes
+
+**Date:** 2026-06-14
+**Fix-list:** `runs/murmur-mobile-2026-06-14/fix-list-2.md`
+
+### Items addressed
+
+| Item | What changed | Proving test |
+|------|-------------|-------------|
+| G-1 | Moved the synchronous `lock.locked()` check to IMMEDIATELY after auth in `app.py/POST /transcribe` (before any `await`), restoring §A step-2 (model_busy) before step-3 (model_not_loaded). The F-3 atomicity guarantee is preserved: no `await` exists between the `lock.locked()` pre-check at step 2 and the `async with lock:` acquire at step 8+, because all intervening checks (steps 3–7) are synchronous or already-completed awaits, and asyncio's cooperative single-threaded model prevents interleaving between synchronous statements. | `test_model_busy_beats_model_not_loaded__G1_spec_A` in `test_server_singleflight.py` |
+| G-2 | Changed `TranscriptionDispatcher` constructor from `(macEngine: MacTranscriptionEngine?, openAiEngine: OpenAITranscriptionEngine)` to `(macEngine: TranscriptionEngine?, openAiEngine: TranscriptionEngine)`. Removed concrete-type imports from the dispatcher. Rewrote `EngineInterfaceTest` with three hand-written substitute `TranscriptionEngine` implementations (`ReadySubstituteEngine`, `AuthFailedSubstituteEngine`, `UnavailableSubstituteEngine`) that implement only the interface — no mocks of concrete classes, no casts. They are passed directly to the constructor, proving AC-42 substitutability at the parameter boundary. | `substitute_engine_drives_dispatcher_health_gate__F7_AC42`, `substitute_engine_auth_failed_no_fallback__F7_AC39_AC42`, `substitute_engine_unavailable_falls_through__F7_AC35_AC42` in `EngineInterfaceTest.kt` |
+| G-3 | Added `testImplementation("org.json:json:20240303")` to `app/build.gradle.kts` so the standalone org.json JVM artifact is on the test classpath. Removed `@RunWith(RobolectricTestRunner::class)` and `@Config(sdk=[34])` from all five engine test files (`MacEngineTest`, `MacEngineEdgeCaseTest`, `OpenAiEngineTest`, `OpenAiEdgeCaseTest`, `JsonParserTest`). Production code continues using the Android platform org.json (unchanged). JaCoCo engine coverage: 89.4%/161 lines (was 16.8%); overall: 92.2%/283 lines (was 50.9%). The F-5 escaped-quote tests still pass. | All tests in `JsonParserTest.kt` including `mac_engine_parses_text_with_escaped_quotes__F5` |
+| G-4 | In `doWork()` Retry branch, changed `computeBackoffSeconds(pending.attemptCount)` to `computeBackoffSeconds((pending.attemptCount - 1).coerceAtLeast(0))`. Since `preflight` increments `attemptCount` from 0→1 before the first attempt, the old formula gave `computeBackoffSeconds(1)=60s` for the first retry; the new formula gives `computeBackoffSeconds(0)=30s`, matching AC-44 "starting at 30 seconds". | `wired_retry_first_delay_is_30s_and_cap_is_300s__G4_AC44` in `ValidationFixesTest.kt` |
+| G-5 | Added two previously-absent proof tests to `tests/unit/test_validation_fixes.py`: `test_python_multipart_version__CVE_2024_53981` (asserts installed python-multipart ≥ 0.0.18 using `packaging.version.Version`) and `test_sanitized_tempfile_suffix__SR3` (posts a filename containing `../../etc/evil.m4a` to POST /transcribe and asserts the response is not 500). Also suppressed ruff N802 for `tests/**` to allow uppercase identifiers like CVE numbers in test function names. | `test_python_multipart_version__CVE_2024_53981` and `test_sanitized_tempfile_suffix__SR3` in `test_validation_fixes.py` |
+
+### Deviations / Gotchas
+
+1. **G-1 TOCTOU analysis**: The spec requires `model_busy` (step 2) to precede `model_not_loaded` (step 3). The F-3 fix had moved the `lock.locked()` check to AFTER all file I/O (to avoid TOCTOU). The G-1 fix adds the synchronous `lock.locked()` check BEFORE file I/O as well as before the `async with lock:` acquire, restoring §A ordering. The atomicity analysis from F-3 still holds: asyncio's cooperative concurrency means no other coroutine can be scheduled between synchronous Python statements. The early `lock.locked()` check at step 2 fires first; the actual acquire happens later at step 8+ with no interleaving possible because there is no `await` between the two. A request that sees `lock.locked()==True` at step 2 returns 503 model_busy immediately without doing any file I/O — this is the correct behavior per §A.
+
+2. **G-3 org.json platform vs. JVM artifact**: The production `MacTranscriptionEngine` and `OpenAITranscriptionEngine` still use `org.json.JSONObject` from the Android platform (no production code changed). The test classpath now also includes `org.json:json:20240303` (Maven Central standalone artifact). On the JVM, the standalone artifact shadows the Android platform class; on Android, the platform class is used. This is the recommended pattern for testing Android code that uses `org.json` in a JVM context.
+
+3. **EngineInterfaceTest redesign**: The previous `EngineInterfaceTest` used `mockk<MacTranscriptionEngine>()` as the substitute, which proved the dispatcher called `checkAvailabilityState()` through the interface but did NOT prove the constructor accepted a non-MacTranscriptionEngine. The rewrite uses hand-written Kotlin classes that implement only `TranscriptionEngine` (not `MacTranscriptionEngine`) and pass directly to the constructor without any cast — this is the only way to prove AC-42 substitutability at the constructor boundary.
+
+### Final Test Suite Status
+
+**Server (MurMur):**
+- `uv run pytest`: 357 passed (+3 new: G-1 + G-5×2), 0 failed, 86.74% coverage (threshold 80%)
+- `uv run ruff check`: all checks passed
+- `uv run mypy src/murmur`: no issues found in 45 source files
+
+**Android (MurmurMobile):**
+- `./gradlew testDebugUnitTest`: 188 passed (+1 new: G-4 wired backoff test), 0 failed
+- `./gradlew assembleDebug`: BUILD SUCCESSFUL
+- `./gradlew jacocoTestReport`: engine 89.4%, overall 92.2% (both ≥80%)
+- `./gradlew lintDebug`: BUILD SUCCESSFUL (0 errors)
+
 ## Documentation
 
 (doc-writer appends here)
