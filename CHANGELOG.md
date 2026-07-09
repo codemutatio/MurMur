@@ -7,6 +7,14 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **Transcription now runs in a recyclable subprocess** instead of a thread inside the menubar app. MLX's Metal buffer pool grew to the peak working set and was never released, pinning ~15 GB in the always-on process (observed peak 81 GB). The model now lives in a child process that is torn down after 120 s idle, so the OS reclaims all GPU memory between dictation sessions; the menubar app stays at ~20 MB. Inside the child: `set_cache_limit(0)` + `clear_cache()` after each segment, and `set_memory_limit(~70% RAM)` as a hard ceiling so no single segment can trigger a swap storm.
+- **Default `local_model` is now `large-v3-turbo`** (~4× faster, lower memory) rather than `large-v3`. Set `local_model = "large-v3"` in config to restore the previous model.
+- **Default `max_segment_s` lowered from 120 s to 30 s** — Whisper's native window is 30 s, so longer segments only inflated the per-call working set without improving accuracy.
+
 ## [0.1.0] — 2026-06-12
 
 Initial release.

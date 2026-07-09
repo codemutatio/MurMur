@@ -8,13 +8,16 @@ device = "default"
 vad_threshold = 0.5
 # Trailing silence duration that closes a speech segment (seconds).
 silence_split_s = 1.5
-# Maximum segment duration before a force-split (seconds).
-max_segment_s = 120.0
+# Maximum segment duration before a force-split (seconds). Whisper's native
+# window is 30 s; longer segments only inflate transcription memory.
+max_segment_s = 30.0
 
 [stt]
-# Local model: "large-v3" (highest accuracy) or "large-v3-turbo" (~4x faster).
+# Local model: "large-v3-turbo" (~4x faster, lower memory) or "large-v3"
+# (small accuracy gain, higher memory/latency). Transcription runs in a
+# recyclable subprocess, so memory is reclaimed when idle either way.
 # Run `murmur bench` and `bakeoff.py` to compare on your voice before choosing.
-local_model = "large-v3"
+local_model = "large-v3-turbo"
 # OpenAI model for API fallback (requires api_fallback = true).
 api_model = "gpt-4o-transcribe"
 # Set true to retry failed local transcriptions via the OpenAI API.
