@@ -234,6 +234,13 @@ class Runtime:
             with contextlib.suppress(Exception):
                 self._worker.join(timeout=timeout)
 
+        # Release the transcription subprocess (if the local engine spawned one)
+        # so its GPU memory is reclaimed and no child outlives the app.
+        close = getattr(self._transcriber, "close", None)
+        if callable(close):
+            with contextlib.suppress(Exception):
+                close()
+
         _log.info("Runtime stopped")
 
     def wait(self) -> None:
@@ -280,7 +287,11 @@ class Runtime:
     # ------------------------------------------------------------------
 
     def _build_local_transcriber(self) -> Transcriber:
-        from murmur.transcribe.local import MlxWhisperTranscriber, assert_apple_silicon
+        from murmur.transcribe.isolated import (
+            SubprocessTranscriber,
+            default_memory_limit_bytes,
+        )
+        from murmur.transcribe.local import assert_apple_silicon
         from murmur.transcribe.models import ModelManager
 
         assert_apple_silicon()
@@ -289,9 +300,17 @@ class Runtime:
             manager = ModelManager(
                 progress=lambda done, total: self.status.set_download(done, total),
             )
+        # Resolve (and, first run only, download) the model in THIS process — a
+        # cheap file operation that never loads MLX/Metal here. The heavy model
+        # load and all GPU allocation happen in the child process, which is torn
+        # down when idle so the always-on menubar app never pins the model in
+        # memory (see murmur.transcribe.isolated for the full rationale).
         model_ref = manager.ensure(self._config.stt.local_model)
         self.status.clear_download()
-        return MlxWhisperTranscriber(model_ref)
+        return SubprocessTranscriber(
+            model_ref,
+            memory_limit_bytes=default_memory_limit_bytes(),
+        )
 
     def _build_fallback_transcriber(self) -> Transcriber | None:
         from murmur.mac.keychain import get_openai_api_key
