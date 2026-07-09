@@ -42,7 +42,13 @@ class SileroVAD:
         from murmur.audio import SAMPLE_RATE
 
         tensor = torch.from_numpy(frame)
-        return float(self._model(tensor, SAMPLE_RATE).item())
+        # no_grad is essential: Silero VAD is stateful (carries recurrent state
+        # across frames), so with autograd enabled each frame's graph chains to
+        # the previous one and the graph grows without bound — ~26 KB/frame,
+        # several GB over a multi-hour always-on session. Inference needs no
+        # gradients anyway.
+        with torch.no_grad():
+            return float(self._model(tensor, SAMPLE_RATE).item())
 
     def reset(self) -> None:
         self._model.reset_states()

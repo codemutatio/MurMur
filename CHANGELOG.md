@@ -9,6 +9,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Fixed
+
+- **Unbounded VAD memory growth** — the Silero VAD ran on every ~32 ms audio frame without `torch.no_grad()`. Because the model is stateful (carries recurrent state across frames), autograd chained each frame's graph to the previous one, growing ~26 KB/frame — several GB over a multi-hour always-on session (observed 6 GB / 2.5 h, mostly swapped). Now wrapped in `torch.no_grad()`; memory stays flat. Was previously masked by the much larger MLX leak.
+
 ### Changed
 
 - **Transcription now runs in a recyclable subprocess** instead of a thread inside the menubar app. MLX's Metal buffer pool grew to the peak working set and was never released, pinning ~15 GB in the always-on process (observed peak 81 GB). The model now lives in a child process that is torn down after 120 s idle, so the OS reclaims all GPU memory between dictation sessions; the menubar app stays at ~20 MB. Inside the child: `set_cache_limit(0)` + `clear_cache()` after each segment, and `set_memory_limit(~70% RAM)` as a hard ceiling so no single segment can trigger a swap storm.
