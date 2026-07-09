@@ -7,6 +7,12 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **Server transcription now runs in a recyclable subprocess** (`SubprocessTranscriber`) instead of an in-process `MlxWhisperTranscriber`. The MLX model's Metal buffer pool grew to the peak working set and was never released, pinning ~4.5 GB in the always-on launchd server for its whole lifetime. The model now lives in a child process torn down after 120 s idle, so memory is reclaimed between requests; the server process stays lean. Inside the child: `set_cache_limit(0)` + `clear_cache()` after each segment, and `set_memory_limit(~70% RAM)` as a hard ceiling. The transcriber is closed on server shutdown so no child outlives a launchd restart.
+
 ## [1.0.0] — 2026-06-14
 
 ### Added

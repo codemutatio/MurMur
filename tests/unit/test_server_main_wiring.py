@@ -2,16 +2,16 @@
 RESOLVED snapshot path returned by ModelManager.ensure(), NOT from the logical
 model name (e.g. "large-v3").
 
-Bug: __main__.py previously constructed MlxWhisperTranscriber(config.stt.model)
+Bug: __main__.py previously constructed the transcriber with config.stt.model
 where config.stt.model == "large-v3".  mlx_whisper then tried to fetch a
 HuggingFace repo literally named "large-v3" and failed with
   "Repository Not Found for url: .../api/models/large-v3/revision/main"
 because "large-v3" is not a valid HF repo slug.
 
 Fix: _build_and_wire_transcriber() calls ModelManager().ensure() to resolve the
-logical name to a local snapshot path, constructs MlxWhisperTranscriber with
-THAT path, assigns it to app.state.transcriber, and only then sets
-model_loaded_flag.
+logical name to a local snapshot path, constructs the transcriber
+(SubprocessTranscriber) with THAT path, assigns it to app.state.transcriber, and
+only then sets model_loaded_flag.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ def _make_app() -> FastAPI:
 
 def test_transcriber_built_from_resolved_snapshot_path__deploy_bug() -> None:
     """_build_and_wire_transcriber passes the ModelManager.ensure() result to
-    MlxWhisperTranscriber, NOT config.stt.model (the logical name).
+    the transcriber, NOT config.stt.model (the logical name).
 
     Asserts model_ref captured by the fake constructor == SENTINEL_PATH.
     """
@@ -64,7 +64,7 @@ def test_transcriber_built_from_resolved_snapshot_path__deploy_bug() -> None:
     captured: dict[str, Any] = {}
 
     class _FakeTranscriber:
-        def __init__(self, model_ref: str) -> None:
+        def __init__(self, model_ref: str, **kwargs: object) -> None:
             captured["model_ref"] = model_ref
 
         def transcribe(self, audio: object, *, language: str, initial_prompt: object) -> object:
@@ -76,7 +76,7 @@ def test_transcriber_built_from_resolved_snapshot_path__deploy_bug() -> None:
             autospec=True,
         ) as mock_manager,
         patch(
-            "murmur.server.__main__.MlxWhisperTranscriber",
+            "murmur.server.__main__.SubprocessTranscriber",
             _FakeTranscriber,
         ),
     ):
@@ -86,7 +86,7 @@ def test_transcriber_built_from_resolved_snapshot_path__deploy_bug() -> None:
 
     # The transcriber must have been constructed with the RESOLVED path
     assert captured.get("model_ref") == _SENTINEL_PATH, (
-        f"MlxWhisperTranscriber was built with {captured.get('model_ref')!r} "
+        f"transcriber was built with {captured.get('model_ref')!r} "
         f"instead of the resolved snapshot path {_SENTINEL_PATH!r}. "
         "The live bug (logical name passed directly) is still present."
     )
@@ -102,7 +102,7 @@ def test_transcriber_not_built_with_logical_model_name__deploy_bug() -> None:
     captured: dict[str, Any] = {}
 
     class _FakeTranscriber:
-        def __init__(self, model_ref: str) -> None:
+        def __init__(self, model_ref: str, **kwargs: object) -> None:
             captured["model_ref"] = model_ref
 
         def transcribe(self, audio: object, *, language: str, initial_prompt: object) -> object:
@@ -113,14 +113,14 @@ def test_transcriber_not_built_with_logical_model_name__deploy_bug() -> None:
 
     with (
         patch("murmur.server.__main__.ModelManager", autospec=True) as mock_manager,
-        patch("murmur.server.__main__.MlxWhisperTranscriber", _FakeTranscriber),
+        patch("murmur.server.__main__.SubprocessTranscriber", _FakeTranscriber),
     ):
         mock_manager.return_value.ensure.return_value = _SENTINEL_PATH
 
         server_main._build_and_wire_transcriber(app, config, flag)
 
     assert captured.get("model_ref") != logical_name, (
-        f"MlxWhisperTranscriber was built with the logical model name "
+        f"transcriber was built with the logical model name "
         f"{logical_name!r} — this reproduces the live HuggingFace 404 bug."
     )
 
@@ -141,7 +141,7 @@ def test_app_state_transcriber_replaced_and_flag_set_after_wire() -> None:
     placeholder = app.state.transcriber
 
     class _FakeTranscriber:
-        def __init__(self, model_ref: str) -> None:
+        def __init__(self, model_ref: str, **kwargs: object) -> None:
             self.model_ref = model_ref
 
         def transcribe(self, audio: object, *, language: str, initial_prompt: object) -> object:
@@ -149,7 +149,7 @@ def test_app_state_transcriber_replaced_and_flag_set_after_wire() -> None:
 
     with (
         patch("murmur.server.__main__.ModelManager", autospec=True) as mock_manager,
-        patch("murmur.server.__main__.MlxWhisperTranscriber", _FakeTranscriber),
+        patch("murmur.server.__main__.SubprocessTranscriber", _FakeTranscriber),
     ):
         mock_manager.return_value.ensure.return_value = _SENTINEL_PATH
 
@@ -227,24 +227,24 @@ def test_model_load_failure_leaves_flag_unset_no_crash() -> None:
 
 
 # ---------------------------------------------------------------------------
-# MlxWhisperTranscriber construction failure → flag stays unset, no crash
+# Transcriber construction failure → flag stays unset, no crash
 # ---------------------------------------------------------------------------
 
 
 def test_transcriber_construction_failure_leaves_flag_unset_no_crash() -> None:
-    """If MlxWhisperTranscriber.__init__ raises (e.g. non-Apple-Silicon),
+    """If the transcriber constructor raises (e.g. non-Apple-Silicon),
     the flag stays unset and no exception escapes the helper.
     """
     flag = threading.Event()
     app = _make_app()
 
-    def _raising_init(model_ref: str) -> None:
+    def _raising_init(model_ref: str, **kwargs: object) -> None:
         raise RuntimeError("murmur requires Apple Silicon (arm64 macOS)")
 
     with (
         patch("murmur.server.__main__.ModelManager", autospec=True) as mock_manager,
         patch(
-            "murmur.server.__main__.MlxWhisperTranscriber",
+            "murmur.server.__main__.SubprocessTranscriber",
             side_effect=_raising_init,
         ),
     ):
