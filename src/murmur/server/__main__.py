@@ -25,7 +25,7 @@ from fastapi import FastAPI
 
 from murmur.server.config import ServerConfig
 from murmur.transcribe.base import TranscriptionResult
-from murmur.transcribe.local import MlxWhisperTranscriber
+from murmur.transcribe.isolated import SubprocessTranscriber, default_memory_limit_bytes
 from murmur.transcribe.models import ModelManager
 
 _log = logging.getLogger(__name__)
@@ -133,6 +133,11 @@ def main() -> None:
             log_level="info",
         )
     finally:
+        # Tear down the transcription subprocess (if the real one was wired)
+        # so no child outlives the server across a launchd restart.
+        close = getattr(getattr(app.state, "transcriber", None), "close", None)
+        if callable(close):
+            close()
         lock.release()
 
 
@@ -183,7 +188,15 @@ def _build_and_wire_transcriber(
         model_ref = manager.ensure(config.stt.model)
         _log.info("Model ready: %s", model_ref)
 
-        transcriber = MlxWhisperTranscriber(model_ref)
+        # Transcribe out-of-process: the MLX model would otherwise grow its
+        # unmanaged Metal buffer cache to the peak working set and pin several GB
+        # in this always-on server for its whole lifetime. SubprocessTranscriber
+        # loads the model in a child that is torn down when idle, so memory is
+        # reclaimed between requests (see murmur.transcribe.isolated).
+        transcriber = SubprocessTranscriber(
+            model_ref,
+            memory_limit_bytes=default_memory_limit_bytes(),
+        )
         app.state.transcriber = transcriber
         model_loaded_flag.set()
     except Exception as exc:
