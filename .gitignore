@@ -32,3 +32,6 @@ state.json
 # Test artefacts
 *.wav
 bakeoff-*.md
+
+
+.gitignore
