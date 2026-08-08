@@ -41,13 +41,19 @@ class CaptureConfig:
     device: str = "default"
     vad_threshold: float = 0.5
     silence_split_s: float = 1.5
-    max_segment_s: float = 120.0
+    # Force-split a continuous speech run at this length. Whisper's native
+    # window is 30 s, so a longer segment only inflates the per-call working
+    # set without improving accuracy — bounded here to keep transcription
+    # memory modest (see murmur.transcribe.isolated).
+    max_segment_s: float = 30.0
 
 
 @dataclass(frozen=True)
 class SttConfig:
     engine: Literal["local", "api"] = "local"
-    local_model: str = "large-v3"
+    # "large-v3-turbo" (~4x faster, smaller decoder, lower memory) is the
+    # default; "large-v3" trades speed for a small accuracy gain.
+    local_model: str = "large-v3-turbo"
     api_model: str = "gpt-4o-transcribe"
     api_fallback: bool = False
     language: str = "en"
