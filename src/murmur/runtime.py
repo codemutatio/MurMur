@@ -287,6 +287,7 @@ class Runtime:
     # ------------------------------------------------------------------
 
     def _build_local_transcriber(self) -> Transcriber:
+        from murmur.transcribe.healing import SelfHealingTranscriber
         from murmur.transcribe.isolated import (
             SubprocessTranscriber,
             default_memory_limit_bytes,
@@ -300,16 +301,24 @@ class Runtime:
             manager = ModelManager(
                 progress=lambda done, total: self.status.set_download(done, total),
             )
-        # Resolve (and, first run only, download) the model in THIS process — a
-        # cheap file operation that never loads MLX/Metal here. The heavy model
-        # load and all GPU allocation happen in the child process, which is torn
-        # down when idle so the always-on menubar app never pins the model in
-        # memory (see murmur.transcribe.isolated for the full rationale).
-        model_ref = manager.ensure(self._config.stt.local_model)
-        self.status.clear_download()
-        return SubprocessTranscriber(
-            model_ref,
-            memory_limit_bytes=default_memory_limit_bytes(),
+        mem_limit = default_memory_limit_bytes()
+
+        def _ensure(model: str) -> str:
+            # Resolve (and, first run / after a cache wipe, download) the model in
+            # THIS process — a cheap file op that never loads MLX/Metal here. The
+            # heavy model load and GPU allocation happen in the child process,
+            # torn down when idle (see murmur.transcribe.isolated).
+            ref = manager.ensure(model)
+            self.status.clear_download()
+            return ref
+
+        # SelfHealingTranscriber re-runs _ensure (re-downloading) if the weights
+        # ever disappear at runtime, so a cache wipe self-recovers instead of
+        # failing every segment until restart.
+        return SelfHealingTranscriber(
+            model_name=self._config.stt.local_model,
+            ensure=_ensure,
+            build_inner=lambda ref: SubprocessTranscriber(ref, memory_limit_bytes=mem_limit),
         )
 
     def _build_fallback_transcriber(self) -> Transcriber | None:

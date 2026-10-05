@@ -25,6 +25,7 @@ from fastapi import FastAPI
 
 from murmur.server.config import ServerConfig
 from murmur.transcribe.base import TranscriptionResult
+from murmur.transcribe.healing import SelfHealingTranscriber
 from murmur.transcribe.isolated import SubprocessTranscriber, default_memory_limit_bytes
 from murmur.transcribe.models import ModelManager
 
@@ -185,17 +186,26 @@ def _build_and_wire_transcriber(
         # attempt a HuggingFace lookup for a repo literally named "large-v3",
         # which fails with "Repository Not Found" (live bug).
         manager = ModelManager()
-        model_ref = manager.ensure(config.stt.model)
-        _log.info("Model ready: %s", model_ref)
+        mem_limit = default_memory_limit_bytes()
+
+        def _ensure(model: str) -> str:
+            ref = manager.ensure(model)
+            _log.info("Model ready: %s", ref)
+            return ref
 
         # Transcribe out-of-process: the MLX model would otherwise grow its
         # unmanaged Metal buffer cache to the peak working set and pin several GB
         # in this always-on server for its whole lifetime. SubprocessTranscriber
         # loads the model in a child that is torn down when idle, so memory is
         # reclaimed between requests (see murmur.transcribe.isolated).
-        transcriber = SubprocessTranscriber(
-            model_ref,
-            memory_limit_bytes=default_memory_limit_bytes(),
+        #
+        # SelfHealingTranscriber re-downloads the model and retries if its files
+        # vanish at runtime (e.g. a cache sweep), so this long-running server
+        # recovers on its own instead of failing every request until restart.
+        transcriber = SelfHealingTranscriber(
+            model_name=config.stt.model,
+            ensure=_ensure,
+            build_inner=lambda ref: SubprocessTranscriber(ref, memory_limit_bytes=mem_limit),
         )
         app.state.transcriber = transcriber
         model_loaded_flag.set()

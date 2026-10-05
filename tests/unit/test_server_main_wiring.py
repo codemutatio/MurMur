@@ -159,10 +159,16 @@ def test_app_state_transcriber_replaced_and_flag_set_after_wire() -> None:
     assert app.state.transcriber is not placeholder, (
         "app.state.transcriber must be replaced (still pointing at placeholder)"
     )
-    assert isinstance(app.state.transcriber, _FakeTranscriber), (
-        "app.state.transcriber must be the real transcriber after wiring"
+    # The transcriber is wrapped in SelfHealingTranscriber; the inner transcriber
+    # is the real one, built from the resolved snapshot path.
+    from murmur.transcribe.healing import SelfHealingTranscriber
+
+    assert isinstance(app.state.transcriber, SelfHealingTranscriber)
+    inner = app.state.transcriber._inner
+    assert isinstance(inner, _FakeTranscriber), (
+        "inner transcriber must be the real transcriber after wiring"
     )
-    assert app.state.transcriber.model_ref == _SENTINEL_PATH
+    assert inner.model_ref == _SENTINEL_PATH
 
 
 # ---------------------------------------------------------------------------
