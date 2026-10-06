@@ -8,6 +8,11 @@ of three zones:
 * ``< new`` and long enough → a brand-new voice ("voice-7");
 * in between → undecided: no label, so as not to guess or grow junk voices.
 
+A one-clip voiceprint is noisy, so the library also repairs itself during
+maintenance: voices that turn out to be the same person are merged (the old
+label is kept as an alias, so earlier transcripts still resolve), and a voice
+heard once and never again is dropped as noise.
+
 Voices start anonymous and gain names three ways: explicit enrolment/naming via
 the CLI, the self-bootstrap (the dominant voice when no call or media is
 happening is the user), and calendar hints written by the nightly processing
@@ -52,6 +57,10 @@ CREATE TABLE IF NOT EXISTS observations (
 );
 CREATE INDEX IF NOT EXISTS obs_ts ON observations(ts);
 CREATE INDEX IF NOT EXISTS obs_voice ON observations(voice_id);
+CREATE TABLE IF NOT EXISTS aliases (
+    old_id INTEGER PRIMARY KEY,
+    new_id INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS hints_applied (
     filename TEXT PRIMARY KEY,
     mtime REAL NOT NULL
@@ -59,13 +68,19 @@ CREATE TABLE IF NOT EXISTS hints_applied (
 """
 
 
+# Calibrated on real call audio (2026-10-06, ~2.9k clips): distinct people's
+# voiceprints sat mostly below 0.30, while one clip of a known person often
+# scored only 0.40-0.50 against their centroid — so the first settings (match
+# 0.50 / new 0.40, tuned on synthetic voices) split one person into dozens.
 @dataclass(frozen=True)
 class Thresholds:
-    match: float = 0.50  # assign to an existing voice
-    new: float = 0.40  # below this, start a new voice
-    update: float = 0.60  # confident enough to refine that voice's centroid
+    match: float = 0.40  # assign to an existing voice
+    new: float = 0.25  # below this, start a new voice
+    update: float = 0.50  # confident enough to refine that voice's centroid
     margin: float = 0.05  # best must beat the runner-up by this (unless >= update)
-    min_new_s: float = 2.0  # minimum speech to start a new voice
+    min_new_s: float = 3.0  # minimum speech to start a new voice (short clips are noisy)
+    young_n: int = 5  # voices with fewer samples refine on any match, to firm up fast
+    merge: float = 0.60  # two voices this alike are one person (merged in maintenance)
 
 
 @dataclass(frozen=True)
@@ -139,7 +154,10 @@ class VoiceStore:
                     (_blob(e), ts, ts),
                 )
                 ident = Identity(int(cur.lastrowid or 0), None, 1.0)
-            elif ident.voice_id is not None and ident.sim >= self.t.update:
+            elif ident.voice_id is not None and (
+                ident.sim >= self.t.update
+                or next(int(r[3]) for r in rows if r[0] == ident.voice_id) < self.t.young_n
+            ):
                 row = next(r for r in rows if r[0] == ident.voice_id)
                 weight = min(int(row[3]), 50)  # keep adapting to drift
                 c = _unit(_vec(row[2]) * weight + e)
@@ -185,14 +203,20 @@ class VoiceStore:
             return ref
         s = str(ref).strip()
         if s.lower().startswith("voice-") and s[6:].isdigit():
-            return int(s[6:])
+            return self._follow(int(s[6:]))
         if s.isdigit():
-            return int(s)
+            return self._follow(int(s))
         with self._lock:
             row = self._db.execute(
                 "SELECT id FROM voices WHERE lower(name)=lower(?) ORDER BY talk_s DESC", (s,)
             ).fetchone()
         return int(row[0]) if row else None
+
+    def _follow(self, vid: int) -> int:
+        """The voice a merged-away id now lives in (itself if not merged)."""
+        with self._lock:
+            row = self._db.execute("SELECT new_id FROM aliases WHERE old_id=?", (vid,)).fetchone()
+        return int(row[0]) if row else vid
 
     def name(self, ref: str | int, name: str, source: str = "user") -> int:
         """Name a voice. If another voice already has that name, merge into it."""
@@ -215,19 +239,80 @@ class VoiceStore:
         if s is None or d is None or s == d:
             raise KeyError(f"Cannot merge {src} into {dst}")
         with self._lock:
-            a = self._db.execute("SELECT centroid, n, talk_s, first_seen FROM voices WHERE id=?", (s,)).fetchone()
-            b = self._db.execute("SELECT centroid, n, talk_s, first_seen FROM voices WHERE id=?", (d,)).fetchone()
+            q = "SELECT centroid, n, talk_s, first_seen, last_seen FROM voices WHERE id=?"
+            a = self._db.execute(q, (s,)).fetchone()
+            b = self._db.execute(q, (d,)).fetchone()
             if not a or not b:
                 raise KeyError(f"Cannot merge {src} into {dst}")
             c = _unit(_vec(a[0]) * a[1] + _vec(b[0]) * b[1])
             self._db.execute(
-                "UPDATE voices SET centroid=?, n=?, talk_s=?, first_seen=? WHERE id=?",
-                (_blob(c), a[1] + b[1], a[2] + b[2], min(a[3], b[3]), d),
+                "UPDATE voices SET centroid=?, n=?, talk_s=?, first_seen=?, last_seen=? WHERE id=?",
+                (_blob(c), a[1] + b[1], a[2] + b[2], min(a[3], b[3]), max(a[4], b[4]), d),
             )
             self._db.execute("UPDATE observations SET voice_id=? WHERE voice_id=?", (d, s))
             self._db.execute("DELETE FROM voices WHERE id=?", (s,))
+            # Earlier transcripts say "voice-<s>": keep that resolvable.
+            self._db.execute("UPDATE aliases SET new_id=? WHERE new_id=?", (d, s))
+            self._db.execute("INSERT OR REPLACE INTO aliases(old_id, new_id) VALUES (?,?)", (s, d))
             self._db.commit()
         return d
+
+    def consolidate(self) -> list[tuple[int, int]]:
+        """Merge voices that are the same person. Returns (merged, into) pairs.
+
+        Two near-identical voices also block each other in matching (neither
+        clears the runner-up margin), so duplicates cost labels, not just tidiness.
+        Two differently-named voices are never merged.
+        """
+        merged: list[tuple[int, int]] = []
+        while True:
+            with self._lock:
+                rows = self._db.execute("SELECT id, name, centroid, talk_s FROM voices").fetchall()
+            if len(rows) < 2:
+                return merged
+            c = np.stack([_vec(r[2]) for r in rows])
+            sims = c @ c.T
+            np.fill_diagonal(sims, -1.0)
+            named = [k for k, r in enumerate(rows) if r[1]]
+            for x in named:
+                for y in named:
+                    if rows[x][1].lower() != rows[y][1].lower():
+                        sims[x, y] = -1.0
+            i, j = np.unravel_index(int(np.argmax(sims)), sims.shape)
+            if sims[i, j] < self.t.merge:
+                return merged
+            a, b = rows[int(i)], rows[int(j)]
+            # Keep the named voice, else the one with more talk time.
+            keep, drop = (a, b) if (bool(a[1]), a[3]) >= (bool(b[1]), b[3]) else (b, a)
+            self.merge(int(drop[0]), int(keep[0]))
+            _log.info(
+                "Merged voice-%d into %s (similarity %.2f)",
+                drop[0], keep[1] or f"voice-{keep[0]}", float(sims[i, j]),
+            )
+            merged.append((int(drop[0]), int(keep[0])))
+
+    def drop_one_offs(self, *, older_than_s: float = 86400.0, now: float | None = None) -> int:
+        """Delete unnamed voices heard in a single clip and not since.
+
+        A voice nobody ever says again is almost always a noisy fragment of
+        someone already known (or a passer-by); keeping it only steals matches.
+        """
+        cutoff = (time.time() if now is None else now) - older_than_s
+        with self._lock:
+            ids = [
+                int(r[0])
+                for r in self._db.execute(
+                    "SELECT id FROM voices WHERE name IS NULL AND n <= 1 "
+                    "AND last_seen - first_seen < 1.0 AND last_seen < ?",
+                    (cutoff,),
+                ).fetchall()
+            ]
+            for vid in ids:
+                self._db.execute("DELETE FROM observations WHERE voice_id=?", (vid,))
+                self._db.execute("DELETE FROM voices WHERE id=?", (vid,))
+                self._db.execute("DELETE FROM aliases WHERE new_id=?", (vid,))
+            self._db.commit()
+        return len(ids)
 
     def forget(self, ref: str | int) -> bool:
         """Erase a voice and every observation of it."""
@@ -237,6 +322,7 @@ class VoiceStore:
         with self._lock:
             self._db.execute("DELETE FROM observations WHERE voice_id=?", (vid,))
             cur = self._db.execute("DELETE FROM voices WHERE id=?", (vid,))
+            self._db.execute("DELETE FROM aliases WHERE new_id=?", (vid,))
             self._db.commit()
             self._db.execute("VACUUM")
             return cur.rowcount > 0
@@ -365,6 +451,12 @@ class VoiceStore:
             self._db.commit()
 
     # ------------------------------------------------------------------ export
+    def _alias_labels(self) -> dict[str, str]:
+        labels = {v.id: v.label for v in self.voices()}
+        with self._lock:
+            rows = self._db.execute("SELECT old_id, new_id FROM aliases ORDER BY old_id").fetchall()
+        return {f"voice-{o}": labels[n] for o, n in rows if n in labels}
+
     def export_json(self, path: Path) -> None:
         """Write names/ids (no embeddings) for the nightly processing task."""
         data = {
@@ -380,6 +472,8 @@ class VoiceStore:
                 }
                 for v in self.voices()
             ],
+            # Merged voices: an old label in earlier transcripts → its current label.
+            "aliases": self._alias_labels(),
         }
         tmp = path.with_suffix(".json.tmp")
         try:

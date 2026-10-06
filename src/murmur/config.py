@@ -94,8 +94,8 @@ class VoicesConfig:
 
     enabled: bool = True
     self_name: str = "Jay"
-    match_threshold: float = 0.50
-    new_voice_threshold: float = 0.40
+    match_threshold: float = 0.40
+    new_voice_threshold: float = 0.25
 
 
 @dataclass(frozen=True)

@@ -42,7 +42,7 @@ class SpeakerTagger:
         self_name: str,
         export_path: Path | None = None,
         hints_dir: Path | None = None,
-        min_embed_s: float = 1.0,
+        min_embed_s: float = 1.5,  # ECAPA on ~1 s of call audio is mostly noise
         maintenance_interval_s: float = 300.0,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -106,7 +106,7 @@ class SpeakerTagger:
         return ident.label or UNKNOWN
 
     def maintenance(self, *, force: bool = False) -> None:
-        """Learn names (self, calendar hints) and export the voice list.
+        """Tidy the library, learn names (self, calendar hints), export the list.
 
         Throttled; called after each processed clip and at startup.
         """
@@ -115,6 +115,10 @@ class SpeakerTagger:
             return
         self._last_maintenance = now
         try:
+            merged = self.store.consolidate()
+            dropped = self.store.drop_one_offs()
+            if merged or dropped:
+                _log.info("Voice library: merged %d duplicate(s), dropped %d one-off(s)", len(merged), dropped)
             self.store.bootstrap_self(self._self_name)
             if self._hints_dir is not None:
                 n = self.store.apply_hint_files(self._hints_dir, self._self_name)

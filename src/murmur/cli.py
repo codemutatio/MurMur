@@ -7,7 +7,7 @@ Commands:
   murmur bench FILE.WAV [--config PATH]
   murmur install-agent
   murmur uninstall-agent
-  murmur voices [list | name VOICE NAME | merge A B | forget VOICE | wipe | enroll]
+  murmur voices [list | name VOICE NAME | merge A B | forget VOICE | tidy | wipe | enroll]
 """
 
 from __future__ import annotations
@@ -78,6 +78,13 @@ def _build_parser() -> argparse.ArgumentParser:
     v_merge.add_argument("into")
     v_forget = vsub.add_parser("forget", help="Erase one person's voiceprint and history.")
     v_forget.add_argument("voice")
+    v_tidy = vsub.add_parser(
+        "tidy", help="Merge duplicate voices and drop one-off fragments (Murmur also does this itself)."
+    )
+    v_tidy.add_argument(
+        "--one-offs-older-than", type=float, default=24.0, metavar="HOURS",
+        help="Drop voices heard only once, at least this long ago (default: 24).",
+    )
     v_wipe = vsub.add_parser("wipe", help="Erase the entire voice library.")
     v_wipe.add_argument("--yes", action="store_true", help="Don't ask for confirmation.")
     v_enroll = vsub.add_parser("enroll", help="Teach a voice from a clean sample (default: you).")
@@ -211,6 +218,11 @@ def _cmd_voices(args: argparse.Namespace) -> int:
                 print(f"No such voice: {args.voice}", file=sys.stderr)
                 return 1
             print(f"Erased {args.voice}")
+        elif action == "tidy":
+            merged = store.consolidate()
+            dropped = store.drop_one_offs(older_than_s=args.one_offs_older_than * 3600)
+            print(f"Merged {len(merged)} duplicate voice(s); dropped {dropped} one-off(s). "
+                  f"{len(store.voices())} voices remain.")
         elif action == "enroll":
             rc = _enroll(store, args, config.voices.self_name)
             if rc != 0:

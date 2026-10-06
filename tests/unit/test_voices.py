@@ -66,7 +66,7 @@ def test_different_voice_gets_new_id(tmp_path: Path) -> None:
 def test_undecided_zone_is_not_labelled(tmp_path: Path) -> None:
     s = store_at(tmp_path)
     s.identify(vec(0), ts=1, dur=3)
-    mid = vec(0) * 0.45 + vec(1) * np.sqrt(1 - 0.45**2)  # cosine 0.45 to voice 0
+    mid = vec(0) * 0.32 + vec(1) * np.sqrt(1 - 0.32**2)  # cosine 0.32 to voice 0
     r = s.identify(mid, ts=2, dur=3)
     assert r.voice_id is None and r.label is None
     assert len(s.voices()) == 1  # no junk voice created
@@ -79,10 +79,73 @@ def test_short_clip_does_not_start_a_new_voice(tmp_path: Path) -> None:
 
 
 def test_thresholds_are_configurable(tmp_path: Path) -> None:
-    s = VoiceStore(tmp_path / "v.db", Thresholds(match=0.4, new=0.3))
+    s = VoiceStore(tmp_path / "v.db", Thresholds(match=0.3, new=0.2))
     s.identify(vec(0), ts=1, dur=3)
-    mid = vec(0) * 0.45 + vec(1) * np.sqrt(1 - 0.45**2)
+    mid = vec(0) * 0.32 + vec(1) * np.sqrt(1 - 0.32**2)
     assert s.identify(mid, ts=2, dur=3).voice_id is not None
+
+
+def at(cos: float, i: int = 0, j: int = 1) -> np.ndarray:
+    """Unit vector with cosine `cos` to speaker i (rest along speaker j)."""
+    return np.asarray(vec(i) * cos + vec(j) * np.sqrt(1 - cos**2), np.float32)
+
+
+def test_a_young_voice_firms_up_on_modest_matches(tmp_path: Path) -> None:
+    # One noisy clip makes a poor centroid; later matches must refine it even
+    # below the usual "confident" bar, or the person keeps splitting.
+    s = store_at(tmp_path)
+    vid = s.identify(vec(0), ts=1, dur=3).voice_id
+    assert s.identify(at(0.45), ts=2, dur=3).voice_id == vid
+    assert next(v for v in s.voices() if v.id == vid).n == 2
+
+
+def test_consolidate_merges_duplicates_and_keeps_old_labels(tmp_path: Path) -> None:
+    s = store_at(tmp_path)
+    jay = s.enroll([vec(0)], "Jay")
+    dup = s.identify(at(0.2, 0, 2), ts=1, dur=3).voice_id  # created as someone new
+    other = s.identify(vec(5), ts=2, dur=3).voice_id
+    s._db.execute("UPDATE voices SET centroid=? WHERE id=?", (at(0.85, 0, 2).tobytes(), dup))
+    s._db.commit()
+    assert s.consolidate() == [(dup, jay)]
+    assert {v.id for v in s.voices()} == {jay, other}
+    assert s.resolve(f"voice-{dup}") == jay  # earlier transcripts still resolve
+    out = tmp_path / ".voices.json"
+    s.export_json(out)
+    assert json.loads(out.read_text())["aliases"] == {f"voice-{dup}": "Jay"}
+
+
+def test_duplicates_stop_blocking_each_other_once_merged(tmp_path: Path) -> None:
+    s = store_at(tmp_path)
+    a = s.identify(vec(0), ts=1, dur=3).voice_id
+    b = s.identify(vec(3), ts=2, dur=3).voice_id
+    s._db.execute("UPDATE voices SET centroid=? WHERE id=?", (at(0.9, 0, 3).tobytes(), b))
+    s._db.commit()
+    clip_ = at(0.48, 0, 4)
+    assert s.identify(clip_, ts=3, dur=3).voice_id is None  # neither wins by the margin
+    s.consolidate()
+    assert s.identify(clip_, ts=4, dur=3).voice_id in (a, b)
+
+
+def test_consolidate_never_merges_two_named_people(tmp_path: Path) -> None:
+    s = store_at(tmp_path)
+    s.enroll([vec(0)], "Jay")
+    s.enroll([at(0.9)], "Tolu")
+    assert s.consolidate() == []
+    assert len(s.voices()) == 2
+
+
+def test_drop_one_offs(tmp_path: Path) -> None:
+    s = store_at(tmp_path)
+    day = 86400.0
+    once_old = s.identify(vec(0), ts=0, dur=3).voice_id
+    recurring = s.identify(vec(1), ts=0, dur=3).voice_id
+    s.identify(vec(1), ts=100, dur=3)
+    named = s.identify(vec(2), ts=0, dur=3).voice_id
+    s.name(named, "Dami")
+    once_recent = s.identify(vec(3), ts=2 * day - 60, dur=3).voice_id
+    assert s.drop_one_offs(now=2 * day) == 1
+    assert {v.id for v in s.voices()} == {recurring, named, once_recent}
+    assert once_old not in {v.id for v in s.voices()}
 
 
 # --- naming / privacy -------------------------------------------------------------
@@ -240,6 +303,16 @@ def test_embedder_failure_degrades_to_unknown(tmp_path: Path) -> None:
     assert turns is not None and turns[0].speaker == UNKNOWN and turns[0].text == "Still transcribed."
 
 
+def test_maintenance_tidies_the_library(tmp_path: Path) -> None:
+    t = tagger(tmp_path)
+    t.store.enroll([vec(0)], "Jay")
+    t.store.enroll([at(0.9)], "Jay-dup")
+    t.store._db.execute("UPDATE voices SET name=NULL WHERE name='Jay-dup'")
+    t.store._db.commit()
+    t.maintenance(force=True)
+    assert [v.label for v in t.store.voices()] == ["Jay"]
+
+
 def test_maintenance_exports_and_learns(tmp_path: Path) -> None:
     out = tmp_path / ".voices.json"
     t = SpeakerTagger(store_at(tmp_path), FakeEmbedder(), self_name="Jay", export_path=out)  # type: ignore[arg-type]
@@ -313,6 +386,8 @@ def test_cli_name_list_forget_wipe(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert cli_main(["voices", "list"]) == 0
     assert "Moses" in capsys.readouterr().out
     assert json.loads((tmp_path / "T" / ".voices.json").read_text())["voices"][0]["name"] == "Moses"
+    assert cli_main(["voices", "tidy"]) == 0
+    assert "Merged 0 duplicate" in capsys.readouterr().out
     assert cli_main(["voices", "forget", "Moses"]) == 0
     assert cli_main(["voices", "wipe", "--yes"]) == 0
     assert not (home / "voices" / "voices.db").exists()
