@@ -149,16 +149,50 @@ def list_audio_processes() -> list[AudioProcess]:
     return _core.processes()
 
 
+# Apps whose holding the mic means "on a call". Matched as a bundle-ID prefix so
+# helper processes count too (e.g. "com.google.Chrome.helper" for Meet).
+# Plenty of other things hold the mic without a call — the system "Hey Siri"
+# listener (com.apple.CoreSpeech) does so almost constantly, dictation tools
+# (Claude desktop voice input, macOS Dictation) while you talk to them — so
+# mic use by anything NOT listed here is ignored rather than called a call.
+CALL_APPS: tuple[str, ...] = (
+    "us.zoom.xos",
+    "com.microsoft.teams",
+    "com.microsoft.teams2",
+    "com.tinyspeck.slackmacgap",  # Slack huddles
+    "com.apple.FaceTime",
+    "com.cisco.webexmeetingsapp",
+    "Cisco-Systems.Spark",  # Webex
+    "net.whatsapp.WhatsApp",
+    "com.hnc.Discord",
+    "ru.keepcoder.Telegram",
+    "com.skype.skype",
+    # Browsers on the mic are almost always a web call (Google Meet, etc.).
+    "com.google.Chrome",
+    "com.apple.Safari",
+    "com.apple.WebKit",  # Safari's media/web-content helpers
+    "org.mozilla.firefox",
+    "com.microsoft.edgemac",
+    "company.thebrowser.Browser",  # Arc
+    "com.brave.Browser",
+)
+
+
+def is_call_app(bundle_id: str) -> bool:
+    return any(bundle_id == p or bundle_id.startswith(p + ".") for p in CALL_APPS)
+
+
 def classify(
     procs: list[AudioProcess], self_pid: int | None = None
 ) -> tuple[ContextKind | None, str | None]:
     """Map active audio processes to ("call"|"media"|None, app bundle id).
 
-    Our own process (the recorder, which always holds the mic) is ignored.
+    Our own process (the recorder, which always holds the mic) is ignored, and
+    only known call apps holding the mic count as a call (see CALL_APPS).
     """
     own = os.getpid() if self_pid is None else self_pid
     others = [p for p in procs if p.pid != own]
-    callers = [p for p in others if p.input]
+    callers = [p for p in others if p.input and is_call_app(p.bundle_id)]
     if callers:
         return "call", callers[0].bundle_id or f"pid:{callers[0].pid}"
     players = [p for p in others if p.output]

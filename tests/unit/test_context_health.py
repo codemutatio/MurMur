@@ -47,6 +47,32 @@ def test_classify_media_when_app_plays_audio() -> None:
     assert classify(procs, SELF) == ("media", "com.google.Chrome")
 
 
+def test_classify_siri_listener_on_mic_is_not_a_call() -> None:
+    # Regression: com.apple.CoreSpeech ("Hey Siri") holds the mic almost
+    # constantly — speech from the speakers was tagged "call" because of it.
+    procs = [
+        _p(SELF, "com.jay.murmur", i=True),
+        _p(793, "com.apple.CoreSpeech", i=True),
+        _p(900, "", o=True),  # `say` playing through the speakers
+    ]
+    assert classify(procs, SELF) == ("media", "pid:900")
+
+
+def test_classify_dictation_tool_on_mic_is_ignored() -> None:
+    procs = [_p(SELF, "com.jay.murmur", i=True), _p(5, "com.anthropic.claudefordesktop.helper", i=True)]
+    assert classify(procs, SELF) == (None, None)
+
+
+def test_classify_call_audio_from_speakers_stays_a_call() -> None:
+    # On a Meet call the other people's voices come out of the speakers (output),
+    # but Chrome also holds the mic — that must read as a call, never media.
+    procs = [
+        _p(SELF, "com.jay.murmur", i=True),
+        _p(11, "com.google.Chrome.helper", i=True, o=True),
+    ]
+    assert classify(procs, SELF) == ("call", "com.google.Chrome.helper")
+
+
 def test_classify_call_beats_media() -> None:
     procs = [
         _p(SELF, "com.jay.murmur", i=True),
