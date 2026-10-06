@@ -20,6 +20,7 @@ import logging
 import os
 import queue
 import signal
+import sys
 import threading
 from collections.abc import Callable
 from datetime import datetime
@@ -106,6 +107,8 @@ class Runtime:
         self._capture_engine: Any = None
         self._worker: TranscribeWorker | None = None
         self._hotkey_listener: Any = None
+        self._health: Any = None
+        self._context_monitor: Any = None
 
         # Optional teardown hook invoked from the signal handler. Menubar mode
         # registers this so SIGTERM/SIGINT break the rumps run loop (which only
@@ -141,6 +144,25 @@ class Runtime:
         if cfg.stt.api_fallback and self._fallback is None:
             self._fallback = self._build_fallback_transcriber()
 
+        # Heartbeat for downstream tooling (.murmur-health.json next to transcripts)
+        from murmur.output.health import HEALTH_FILENAME, HealthReporter
+
+        self._health = HealthReporter(
+            cfg.storage.transcripts_dir / HEALTH_FILENAME,
+            model=cfg.stt.local_model if cfg.stt.engine == "local" else cfg.stt.api_model,
+            now=self._now,
+            is_paused=self.controller.effective_paused,
+            spool_dir=cfg.storage.spool_dir,
+        )
+        self._health.start()
+
+        # Call/media context: which other apps hold the mic or play audio
+        if cfg.capture.context_tags and sys.platform == "darwin":
+            from murmur.audio.context import AudioContextMonitor
+
+            self._context_monitor = AudioContextMonitor(stop=self._stop_event)
+            self._context_monitor.start()
+
         # Start worker thread
         self._worker = TranscribeWorker(
             spool_dir=cfg.storage.spool_dir,
@@ -154,6 +176,9 @@ class Runtime:
             initial_prompt=prompt,
             backlog_drained=self._backlog_drained,
             stop=self._stop_event,
+            context=self._context_monitor,
+            skip_media=cfg.capture.skip_media,
+            health=self._health,
         )
         self._worker.start()
         _log.info("TranscribeWorker started")
@@ -240,6 +265,10 @@ class Runtime:
         if callable(close):
             with contextlib.suppress(Exception):
                 close()
+
+        if self._health is not None:
+            with contextlib.suppress(Exception):
+                self._health.stop()  # final heartbeat: state "stopped"
 
         _log.info("Runtime stopped")
 

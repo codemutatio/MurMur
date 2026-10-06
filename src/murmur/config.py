@@ -46,6 +46,13 @@ class CaptureConfig:
     # set without improving accuracy — bounded here to keep transcription
     # memory modest (see murmur.transcribe.isolated).
     max_segment_s: float = 30.0
+    # Tag each transcript entry captured while another app used the mic
+    # ("call") or played audio ("media") — see murmur.audio.context.
+    context_tags: bool = True
+    # Don't transcribe segments captured while media was playing. Off by default:
+    # without knowing whose voice it is, this would also drop you talking over
+    # music or a video.
+    skip_media: bool = False
 
 
 @dataclass(frozen=True)
@@ -134,7 +141,9 @@ def _parse_capture(raw: Any, warnings: list[str]) -> CaptureConfig:
         warnings.append("'capture' section is not a table; using defaults.")
         return CaptureConfig()
     d = CaptureConfig()
-    known = {"device", "vad_threshold", "silence_split_s", "max_segment_s"}
+    known = {
+        "device", "vad_threshold", "silence_split_s", "max_segment_s", "context_tags", "skip_media",
+    }
     for k in raw:
         if k not in known:
             warnings.append(f"Unknown capture key '{k}' ignored.")
@@ -143,6 +152,8 @@ def _parse_capture(raw: Any, warnings: list[str]) -> CaptureConfig:
         vad_threshold=_coerce(raw, "vad_threshold", float, d.vad_threshold, warnings),
         silence_split_s=_coerce(raw, "silence_split_s", float, d.silence_split_s, warnings),
         max_segment_s=_coerce(raw, "max_segment_s", float, d.max_segment_s, warnings),
+        context_tags=_coerce(raw, "context_tags", bool, d.context_tags, warnings),
+        skip_media=_coerce(raw, "skip_media", bool, d.skip_media, warnings),
     )
 
 
