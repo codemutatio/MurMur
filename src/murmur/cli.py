@@ -88,8 +88,49 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def isolate_app_sys_path() -> list[str]:
+    """Inside Murmur.app, make Murmur's own environment win over stray copies.
+
+    The py2app alias bundle launches the framework Python, whose startup puts the
+    system-wide site-packages and the personal ``~/Library/Python/X.Y`` one on
+    sys.path *before* the bundle appends Murmur's uv-tool environment. Any
+    package installed in those places then silently shadows Murmur's pinned
+    version inside the app (observed: numpy 1.26 instead of 2.4, a ruamel.yaml
+    that broke SpeechBrain, older pydantic/requests/...). Must run before any of
+    those are imported. No-op outside the bundle. Returns the removed entries.
+    """
+    import os
+    import site
+
+    if getattr(sys, "frozen", None) != "macosx_app":
+        return []
+    own = os.path.realpath(str(Path(__file__).resolve().parents[1]))  # dir holding murmur/
+    ver = f"python{sys.version_info[0]}.{sys.version_info[1]}"
+    strays = [
+        os.path.realpath(p)
+        for p in (
+            site.getusersitepackages(),
+            os.path.join(sys.base_prefix, "lib", ver, "site-packages"),
+        )
+        if p
+    ]
+    strays = [s for s in strays if s != own]
+
+    def is_stray(p: str) -> bool:
+        rp = os.path.realpath(p) if p else p
+        return any(rp == s or rp.startswith(s + os.sep) for s in strays)
+
+    removed = [p for p in sys.path if is_stray(p)]
+    sys.path[:] = [own] + [p for p in sys.path if p and not is_stray(p) and os.path.realpath(p) != own]
+    return removed
+
+
+_ISOLATION_REMOVED: list[str] = []
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point. Returns exit code."""
+    _ISOLATION_REMOVED[:] = isolate_app_sys_path()
     # Lazy import of heavy modules — lock is acquired before any torch/mlx import (AC-6).
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -235,6 +276,16 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     paths = resolve_paths(os.environ, getattr(args, "config", None))
     configure_logging(paths.log_file)
+    if _ISOLATION_REMOVED:
+        import logging
+
+        import numpy
+
+        logging.getLogger("murmur.cli").info(
+            "Murmur.app: using Murmur's own environment (numpy %s); dropped stray paths: %s",
+            numpy.__version__,
+            ", ".join(_ISOLATION_REMOVED),
+        )
 
     lock = SingleInstanceLock(paths.lock_file)
     try:

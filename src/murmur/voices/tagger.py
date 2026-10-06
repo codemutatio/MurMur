@@ -99,7 +99,7 @@ class SpeakerTagger:
             ident = self.store.identify(self._embedder.embed(audio), ts=ts, dur=dur, context=context)
         except Exception as exc:
             if not self._embed_failed:
-                _log.warning("Speaker identification unavailable: %s", exc)
+                _log.warning("Speaker identification unavailable: %s", exc, exc_info=True)
                 self._embed_failed = True
             return prev
         self._embed_failed = False
