@@ -7,6 +7,7 @@ Commands:
   murmur bench FILE.WAV [--config PATH]
   murmur install-agent
   murmur uninstall-agent
+  murmur voices [list | name VOICE NAME | merge A B | forget VOICE | wipe | enroll]
 """
 
 from __future__ import annotations
@@ -64,6 +65,26 @@ def _build_parser() -> argparse.ArgumentParser:
     # murmur uninstall-agent
     sub.add_parser("uninstall-agent", help="Uninstall launchd user agent.")
 
+    # murmur voices …
+    voices_p = sub.add_parser("voices", help="Manage the speaker-recognition voice library.")
+    voices_p.add_argument("--config", type=Path, metavar="PATH", help="Config file path.")
+    vsub = voices_p.add_subparsers(dest="voices_cmd", metavar="<action>")
+    vsub.add_parser("list", help="List known voices.")
+    v_name = vsub.add_parser("name", help='Name a voice, e.g. murmur voices name voice-7 "Tolu Abimbola".')
+    v_name.add_argument("voice")
+    v_name.add_argument("name")
+    v_merge = vsub.add_parser("merge", help="Merge two voices that are the same person.")
+    v_merge.add_argument("source")
+    v_merge.add_argument("into")
+    v_forget = vsub.add_parser("forget", help="Erase one person's voiceprint and history.")
+    v_forget.add_argument("voice")
+    v_wipe = vsub.add_parser("wipe", help="Erase the entire voice library.")
+    v_wipe.add_argument("--yes", action="store_true", help="Don't ask for confirmation.")
+    v_enroll = vsub.add_parser("enroll", help="Teach a voice from a clean sample (default: you).")
+    v_enroll.add_argument("--name", help="Whose voice (default: voices.self_name).")
+    v_enroll.add_argument("--seconds", type=float, default=30.0, help="Mic recording length.")
+    v_enroll.add_argument("--file", type=Path, help="Use a WAV/AIFF file instead of the mic.")
+
     return parser
 
 
@@ -91,9 +112,116 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_install_app_agent(args)
     if args.command == "uninstall-agent":
         return _cmd_uninstall_agent()
+    if args.command == "voices":
+        return _cmd_voices(args)
 
     parser.print_help()
     return 2
+
+
+def _cmd_voices(args: argparse.Namespace) -> int:
+    import os
+    from datetime import datetime
+
+    from murmur.config import load_config
+    from murmur.paths import resolve_paths
+    from murmur.voices.store import VoiceStore, wipe
+
+    paths = resolve_paths(os.environ, getattr(args, "config", None))
+    config, _ = load_config(paths.config_file)
+    db = paths.home / "voices" / "voices.db"
+    export = config.storage.transcripts_dir / ".voices.json"
+    action = args.voices_cmd
+
+    if action == "wipe":
+        if not args.yes:
+            reply = input("Erase ALL stored voiceprints? This cannot be undone. [y/N] ")
+            if reply.strip().lower() not in ("y", "yes"):
+                print("Cancelled.")
+                return 1
+        removed = wipe(db)
+        export.unlink(missing_ok=True)
+        print("Voice library erased." if removed else "No voice library to erase.")
+        return 0
+
+    store = VoiceStore(db)
+    try:
+        if action in (None, "list"):
+            voices = store.voices()
+            if not voices:
+                print("No voices yet — they appear as Murmur hears people.")
+                return 0
+            print(f"{'voice':<12} {'name':<24} {'named by':<10} {'talk':>8}  last heard")
+            for v in voices:
+                last = datetime.fromtimestamp(v.last_seen).strftime("%Y-%m-%d %H:%M")
+                print(
+                    f"voice-{v.id:<6} {v.name or '—':<24} {v.name_source or '':<10} "
+                    f"{v.talk_s / 60:>6.1f}m  {last}"
+                )
+            return 0
+        if action == "name":
+            vid = store.name(args.voice, args.name, source="user")
+            print(f"voice-{vid} is now {args.name}")
+        elif action == "merge":
+            vid = store.merge(args.source, args.into)
+            print(f"Merged {args.source} into voice-{vid}")
+        elif action == "forget":
+            if not store.forget(args.voice):
+                print(f"No such voice: {args.voice}", file=sys.stderr)
+                return 1
+            print(f"Erased {args.voice}")
+        elif action == "enroll":
+            rc = _enroll(store, args, config.voices.self_name)
+            if rc != 0:
+                return rc
+        store.export_json(export)
+        return 0
+    except KeyError as exc:
+        print(str(exc).strip("'\""), file=sys.stderr)
+        return 1
+    finally:
+        store.close()
+
+
+def _enroll(store: object, args: argparse.Namespace, self_name: str) -> int:
+    import numpy as np
+
+    from murmur.voices.embedder import SAMPLE_RATE, SpeakerEmbedder
+    from murmur.voices.store import VoiceStore
+
+    assert isinstance(store, VoiceStore)
+    name = args.name or self_name
+    if args.file:
+        import subprocess
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            wav = Path(td) / "enroll.wav"
+            subprocess.run(
+                ["ffmpeg", "-y", "-loglevel", "error", "-i", str(args.file),
+                 "-ar", str(SAMPLE_RATE), "-ac", "1", "-f", "f32le", str(wav)],
+                check=True,
+            )
+            audio = np.fromfile(wav, dtype=np.float32)
+    else:
+        import sounddevice as sd
+
+        print(f"Recording {args.seconds:.0f}s — read anything aloud in your normal voice…")
+        audio = sd.rec(int(args.seconds * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1,
+                       dtype="float32")
+        sd.wait()
+        audio = audio[:, 0]
+    win = 3 * SAMPLE_RATE
+    chunks = [audio[i : i + win] for i in range(0, len(audio) - win + 1, win)]
+    chunks = [c for c in chunks if float(np.sqrt(np.mean(c**2))) > 0.005]  # skip silence
+    if len(chunks) < 3:
+        print("Not enough speech captured — try again with a longer or louder sample.", file=sys.stderr)
+        return 1
+    emb = SpeakerEmbedder()
+    source = "self" if name == self_name else "user"
+    vid = store.enroll([emb.embed(c) for c in chunks], name, source=source)
+    print(f"Enrolled {name} as voice-{vid} from {len(chunks)} samples.")
+    return 0
 
 
 def _cmd_run(args: argparse.Namespace) -> int:

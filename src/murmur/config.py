@@ -88,12 +88,24 @@ class NotesConfig:
 
 
 @dataclass(frozen=True)
+class VoicesConfig:
+    """Speaker recognition (murmur.voices). Voiceprints are biometric data and
+    stay on this Mac; `murmur voices wipe` erases them all."""
+
+    enabled: bool = True
+    self_name: str = "Jay"
+    match_threshold: float = 0.50
+    new_voice_threshold: float = 0.40
+
+
+@dataclass(frozen=True)
 class Config:
     capture: CaptureConfig = field(default_factory=CaptureConfig)
     stt: SttConfig = field(default_factory=SttConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     hotkey: HotkeyConfig = field(default_factory=HotkeyConfig)
     notes: NotesConfig = field(default_factory=NotesConfig)
+    voices: VoicesConfig = field(default_factory=VoicesConfig)
 
 
 def load_config(path: Path | None) -> tuple[Config, list[str]]:
@@ -117,7 +129,7 @@ def load_config(path: Path | None) -> tuple[Config, list[str]]:
         warnings.append(f"Config file {path} could not be parsed ({exc}); using all defaults.")
         return Config(), warnings
 
-    known_top = {"capture", "stt", "storage", "hotkey", "notes"}
+    known_top = {"capture", "stt", "storage", "hotkey", "notes", "voices"}
     for key in raw:
         if key not in known_top:
             warnings.append(f"Unknown config key '{key}' ignored.")
@@ -127,8 +139,14 @@ def load_config(path: Path | None) -> tuple[Config, list[str]]:
     storage = _parse_storage(raw.get("storage", {}), warnings)
     hotkey = _parse_hotkey(raw.get("hotkey", {}), warnings)
     notes = _parse_notes(raw.get("notes", {}), warnings)
+    voices = _parse_voices(raw.get("voices", {}), warnings)
 
-    return Config(capture=capture, stt=stt, storage=storage, hotkey=hotkey, notes=notes), warnings
+    return (
+        Config(
+            capture=capture, stt=stt, storage=storage, hotkey=hotkey, notes=notes, voices=voices
+        ),
+        warnings,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +265,25 @@ def _parse_notes(raw: Any, warnings: list[str]) -> NotesConfig:
             warnings.append(f"Unknown notes key '{k}' ignored.")
     return NotesConfig(
         enabled=_coerce(raw, "enabled", bool, d.enabled, warnings),
+    )
+
+
+def _parse_voices(raw: Any, warnings: list[str]) -> VoicesConfig:
+    if not isinstance(raw, dict):
+        warnings.append("'voices' section is not a table; using defaults.")
+        return VoicesConfig()
+    d = VoicesConfig()
+    known = {"enabled", "self_name", "match_threshold", "new_voice_threshold"}
+    for k in raw:
+        if k not in known:
+            warnings.append(f"Unknown voices key '{k}' ignored.")
+    return VoicesConfig(
+        enabled=_coerce(raw, "enabled", bool, d.enabled, warnings),
+        self_name=_coerce(raw, "self_name", str, d.self_name, warnings),
+        match_threshold=_coerce(raw, "match_threshold", float, d.match_threshold, warnings),
+        new_voice_threshold=_coerce(
+            raw, "new_voice_threshold", float, d.new_voice_threshold, warnings
+        ),
     )
 
 
