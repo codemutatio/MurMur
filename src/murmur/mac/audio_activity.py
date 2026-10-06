@@ -155,7 +155,7 @@ def list_audio_processes() -> list[AudioProcess]:
 # listener (com.apple.CoreSpeech) does so almost constantly, dictation tools
 # (Claude desktop voice input, macOS Dictation) while you talk to them — so
 # mic use by anything NOT listed here is ignored rather than called a call.
-CALL_APPS: tuple[str, ...] = (
+CHAT_APPS: tuple[str, ...] = (
     "us.zoom.xos",
     "com.microsoft.teams",
     "com.microsoft.teams2",
@@ -167,7 +167,9 @@ CALL_APPS: tuple[str, ...] = (
     "com.hnc.Discord",
     "ru.keepcoder.Telegram",
     "com.skype.skype",
-    # Browsers on the mic are almost always a web call (Google Meet, etc.).
+)
+BROWSERS: tuple[str, ...] = (
+    # A browser on the mic is almost always a web call (Google Meet, etc.).
     "com.google.Chrome",
     "com.apple.Safari",
     "com.apple.WebKit",  # Safari's media/web-content helpers
@@ -176,10 +178,26 @@ CALL_APPS: tuple[str, ...] = (
     "company.thebrowser.Browser",  # Arc
     "com.brave.Browser",
 )
+CALL_APPS: tuple[str, ...] = CHAT_APPS + BROWSERS
+
+# Apps whose sound output is notifications/ringing, not media. Chat apps (and
+# Chromium-based ones in particular) keep the output stream open for several
+# seconds after a ding, so without this anything said right after a Slack
+# notification would be tagged "media". When they hold the mic too, it's a call.
+NOT_MEDIA_APPS: tuple[str, ...] = CHAT_APPS + (
+    "com.apple.MobileSMS",  # Messages
+    "com.apple.mail",
+    "com.apple.iCal",
+    "com.apple.notificationcenterui",
+)
+
+
+def _matches(bundle_id: str, prefixes: tuple[str, ...]) -> bool:
+    return any(bundle_id == p or bundle_id.startswith(p + ".") for p in prefixes)
 
 
 def is_call_app(bundle_id: str) -> bool:
-    return any(bundle_id == p or bundle_id.startswith(p + ".") for p in CALL_APPS)
+    return _matches(bundle_id, CALL_APPS)
 
 
 def classify(
@@ -195,7 +213,7 @@ def classify(
     callers = [p for p in others if p.input and is_call_app(p.bundle_id)]
     if callers:
         return "call", callers[0].bundle_id or f"pid:{callers[0].pid}"
-    players = [p for p in others if p.output]
+    players = [p for p in others if p.output and not _matches(p.bundle_id, NOT_MEDIA_APPS)]
     if players:
         return "media", players[0].bundle_id or f"pid:{players[0].pid}"
     return None, None

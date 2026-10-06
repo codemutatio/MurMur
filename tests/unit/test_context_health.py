@@ -73,6 +73,17 @@ def test_classify_call_audio_from_speakers_stays_a_call() -> None:
     assert classify(procs, SELF) == ("call", "com.google.Chrome.helper")
 
 
+def test_classify_chat_app_notification_sound_is_not_media() -> None:
+    # Live: Slack's helper held the speakers ~8 s after a ding, with no huddle.
+    procs = [_p(SELF, "com.jay.murmur", i=True), _p(4, "com.tinyspeck.slackmacgap.helper", o=True)]
+    assert classify(procs, SELF) == (None, None)
+
+
+def test_classify_browser_video_is_media() -> None:
+    procs = [_p(SELF, "com.jay.murmur", i=True), _p(6, "com.google.Chrome.helper", o=True)]
+    assert classify(procs, SELF) == ("media", "com.google.Chrome.helper")
+
+
 def test_classify_call_beats_media() -> None:
     procs = [
         _p(SELF, "com.jay.murmur", i=True),
