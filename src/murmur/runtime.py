@@ -109,6 +109,7 @@ class Runtime:
         self._hotkey_listener: Any = None
         self._health: Any = None
         self._context_monitor: Any = None
+        self._voice_store: Any = None
 
         # Optional teardown hook invoked from the signal handler. Menubar mode
         # registers this so SIGTERM/SIGINT break the rumps run loop (which only
@@ -153,6 +154,7 @@ class Runtime:
             now=self._now,
             is_paused=self.controller.effective_paused,
             spool_dir=cfg.storage.spool_dir,
+            worker_pid=lambda: getattr(self._transcriber, "pid", None),
         )
         self._health.start()
 
@@ -162,6 +164,9 @@ class Runtime:
 
             self._context_monitor = AudioContextMonitor(stop=self._stop_event)
             self._context_monitor.start()
+
+        # Speaker recognition (voice library + per-turn labels)
+        speakers = self._build_speaker_tagger()
 
         # Start worker thread
         self._worker = TranscribeWorker(
@@ -179,6 +184,7 @@ class Runtime:
             context=self._context_monitor,
             skip_media=cfg.capture.skip_media,
             health=self._health,
+            speakers=speakers,
         )
         self._worker.start()
         _log.info("TranscribeWorker started")
@@ -270,6 +276,10 @@ class Runtime:
             with contextlib.suppress(Exception):
                 self._health.stop()  # final heartbeat: state "stopped"
 
+        if self._voice_store is not None:
+            with contextlib.suppress(Exception):
+                self._voice_store.close()
+
         _log.info("Runtime stopped")
 
     def wait(self) -> None:
@@ -348,6 +358,39 @@ class Runtime:
             model_name=self._config.stt.local_model,
             ensure=_ensure,
             build_inner=lambda ref: SubprocessTranscriber(ref, memory_limit_bytes=mem_limit),
+        )
+
+    def _build_speaker_tagger(self) -> Any:
+        """SpeakerTagger, or None if disabled or SpeechBrain isn't installed."""
+        import importlib.util
+
+        vcfg = self._config.voices
+        if not vcfg.enabled:
+            return None
+        if importlib.util.find_spec("speechbrain") is None:
+            _log.warning("Speaker recognition disabled: speechbrain is not installed")
+            return None
+        from murmur.voices.embedder import SpeakerEmbedder
+        from murmur.voices.store import Thresholds, VoiceStore
+        from murmur.voices.tagger import SpeakerTagger
+
+        try:
+            store = VoiceStore(
+                self._paths.home / "voices" / "voices.db",
+                Thresholds(match=vcfg.match_threshold, new=vcfg.new_voice_threshold),
+            )
+            store.prune()
+        except Exception as exc:
+            _log.warning("Speaker recognition disabled: voice library unavailable: %s", exc)
+            return None
+        self._voice_store = store
+        tdir = self._config.storage.transcripts_dir
+        return SpeakerTagger(
+            store,
+            SpeakerEmbedder(),
+            self_name=vcfg.self_name,
+            export_path=tdir / ".voices.json",
+            hints_dir=tdir / ".speaker-hints",
         )
 
     def _build_fallback_transcriber(self) -> Transcriber | None:

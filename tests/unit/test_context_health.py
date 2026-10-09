@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
 import re
 import sys
@@ -262,6 +263,35 @@ def test_health_states_and_file(tmp_path: Path) -> None:
     h.write(stopped=True)
     data = json.loads((tmp_path / ".murmur-health.json").read_text())
     assert data["state"] == "stopped" and data["spool_backlog"] == 1 and data["model"] == "large-v3"
+
+
+def test_health_reports_memory_and_worker_peak(tmp_path: Path) -> None:
+    from murmur.mac.memory import Footprint
+
+    mb = 1024 * 1024
+    worker = {"pid": None}
+    sizes = {os.getpid(): Footprint(400 * mb, 650 * mb), 4242: Footprint(3000 * mb, 3100 * mb)}
+    h = HealthReporter(
+        tmp_path / "h.json", model="large-v3", now=FixedClock(datetime(2026, 10, 9, tzinfo=UTC)),
+        worker_pid=lambda: worker["pid"], footprint=sizes.get,
+    )
+    mem = h.snapshot()["memory"]
+    assert mem == {"app_mb": 400, "app_peak_mb": 650, "worker_mb": None, "worker_peak_mb": None}
+    worker["pid"] = 4242
+    assert h.snapshot()["memory"]["worker_mb"] == 3000
+    worker["pid"] = None  # released when idle: peak is remembered
+    assert h.snapshot()["memory"] == {"app_mb": 400, "app_peak_mb": 650, "worker_mb": None, "worker_peak_mb": 3100}
+
+
+def test_real_footprint_of_this_process() -> None:
+    from murmur.mac.memory import footprint
+
+    f = footprint(os.getpid())
+    if sys.platform != "darwin":
+        assert f is None
+        return
+    assert f is not None and 10 * 1024 * 1024 < f.current <= f.peak
+    assert footprint(2**22 + 12345) is None  # no such process
 
 
 # --- config -----------------------------------------------------------------------

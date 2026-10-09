@@ -9,6 +9,9 @@ nightly/morning Cowork tasks already read — every minute and on shutdown.
 disambiguates: a fresh ``updated_at`` with recent ``last_transcribed_at`` is
 healthy; a fresh ``updated_at`` with climbing ``consecutive_errors`` is broken;
 a stale ``updated_at`` means the app isn't running at all.
+
+``memory`` records the app's and the transcription worker's footprint, so a
+slow leak (the 15 GB one went unseen for weeks) shows up in the morning digest.
 """
 
 from __future__ import annotations
@@ -43,6 +46,8 @@ class HealthReporter:
         now: Callable[[], datetime],
         is_paused: Callable[[], bool] = lambda: False,
         spool_dir: Path | None = None,
+        worker_pid: Callable[[], int | None] = lambda: None,
+        footprint: Callable[[int], Any] | None = None,
         interval_s: float = 60.0,
     ) -> None:
         self._path = path
@@ -51,6 +56,13 @@ class HealthReporter:
         self._is_paused = is_paused
         self._spool_dir = spool_dir
         self._interval_s = interval_s
+        self._worker_pid = worker_pid
+        if footprint is None:
+            from murmur.mac.memory import footprint as mac_footprint
+
+            footprint = mac_footprint
+        self._footprint: Callable[[int], Any] = footprint
+        self._worker_peak = 0
         self._lock = threading.Lock()
         self._started_at = now()
         self._last_success: datetime | None = None
@@ -122,7 +134,24 @@ class HealthReporter:
                 "segments_tagged_media": self._media_tagged,
                 "segments_tagged_call": self._call_tagged,
                 "media_segments_skipped": self._media_skipped,
+                "memory": self._memory_locked(),
             }
+
+    def _memory_locked(self) -> dict[str, int | None]:
+        """Footprints in MB. The worker comes and goes (it's released when idle),
+        so its peak is the largest seen across heartbeats since the app started."""
+        mb = 1024 * 1024
+        app = self._footprint(os.getpid())
+        pid = self._worker_pid()
+        worker = self._footprint(pid) if pid else None
+        if worker is not None:
+            self._worker_peak = max(self._worker_peak, worker.peak)
+        return {
+            "app_mb": round(app.current / mb) if app else None,
+            "app_peak_mb": round(app.peak / mb) if app else None,
+            "worker_mb": round(worker.current / mb) if worker else None,
+            "worker_peak_mb": round(self._worker_peak / mb) if self._worker_peak else None,
+        }
 
     def write(self, *, stopped: bool = False) -> None:
         data = json.dumps(self.snapshot(stopped=stopped), indent=2) + "\n"
