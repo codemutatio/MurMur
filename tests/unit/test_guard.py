@@ -116,3 +116,19 @@ def test_threshold_boundary_no_speech_exactly_at_max() -> None:
     """no_speech_prob == NO_SPEECH_PROB_MAX is NOT dropped (boundary)."""
     r = _result(_seg(no_speech_prob=NO_SPEECH_PROB_MAX, avg_logprob=-2.0))
     assert clean_result(r) == "Hello world"
+
+
+def test_drops_filler_phrase_with_any_punctuation() -> None:
+    # Whisper's most common leak: "Thanks for watching!" (~50 lines a day).
+    for text in ("Thanks for watching!", "Thank you for watching!", " thanks for watching... ", "Thanks for watching?"):
+        assert clean_result(_result(_seg(text))) is None, text
+
+
+def test_drops_punctuation_only_segments() -> None:
+    for text in ("!", "...", "?!", "…"):
+        assert clean_result(_result(_seg(text))) is None, text
+
+
+def test_keeps_real_short_speech() -> None:
+    for text in ("Okay.", "Yeah?", "Okay, thank you.", "Thanks for watching the demo, Tolu!"):
+        assert clean_result(_result(_seg(text))) == text, text

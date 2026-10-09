@@ -43,6 +43,9 @@ FILLER_PHRASES: frozenset[str] = frozenset(
 )
 
 
+_PUNCTUATION = " .,!?…'\"-—"
+
+
 def clean_result(r: TranscriptionResult) -> str | None:
     """Filter hallucination artifacts from *r* and return clean text.
 
@@ -67,8 +70,11 @@ def segment_survives(seg: SegmentScore) -> bool:
     text = seg.text.strip()
     if not text:
         return False
-    normalized = text.lower().rstrip(".")
-    if normalized in FILLER_PHRASES or text in FILLER_PHRASES:
+    # Strip surrounding punctuation before matching: Whisper emits "Thanks for
+    # watching!" as often as the full-stop form (~50 leaked lines a day), and a
+    # lone "!" or "..." is never speech.
+    normalized = text.lower().strip(_PUNCTUATION)
+    if not normalized or normalized in FILLER_PHRASES or text in FILLER_PHRASES:
         return False
     if seg.no_speech_prob > NO_SPEECH_PROB_MAX and seg.avg_logprob < AVG_LOGPROB_MIN:
         return False
