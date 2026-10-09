@@ -320,6 +320,73 @@ def test_maintenance_exports_and_learns(tmp_path: Path) -> None:
     assert json.loads(out.read_text())["voices"] == []
 
 
+# --- context labelling ---------------------------------------------------------------
+
+JAY, OTHER, WEAK_JAY, FAINT_JAY = 1, 2, 3, 4  # clip "speaker codes" for MapEmbedder
+
+
+class MapEmbedder:
+    """Speaker code (encoded in the audio level) → a chosen voiceprint."""
+
+    def embed(self, audio: np.ndarray) -> np.ndarray:
+        code = int(round(float(np.median(audio)) * 100))
+        return {
+            JAY: vec(0),
+            OTHER: vec(5),
+            WEAK_JAY: at(0.35, 0, 6),  # undecided, nearest Jay
+            FAINT_JAY: at(0.27, 0, 6),  # undecided, too faint for context
+        }[code]
+
+
+def ctx_tagger(tmp_path: Path) -> SpeakerTagger:
+    t = SpeakerTagger(store_at(tmp_path), MapEmbedder(), self_name="Jay")  # type: ignore[arg-type]
+    t.store.enroll([vec(0)], "Jay")
+    t.store.enroll([vec(5)], "Moses")
+    return t
+
+
+def speakers(t: SpeakerTagger, start: float, *parts: tuple[int, float]) -> list[str]:
+    audio = clip(*parts)
+    segs, pos = [], 0.0
+    for code, sec in parts:
+        segs.append(seg(f"line {code}", pos, pos + sec))
+        pos += sec
+    turns = t.turns(audio, start, segs, None) or []
+    return [x.speaker for x in turns]
+
+
+def test_weak_match_takes_the_neighbouring_speaker(tmp_path: Path) -> None:
+    t = ctx_tagger(tmp_path)
+    assert speakers(t, 0, (JAY, 4), (WEAK_JAY, 4)) == ["Jay"]  # previous
+    assert speakers(t, 100, (WEAK_JAY, 4), (JAY, 4)) == ["Jay"]  # next
+
+
+def test_weak_match_stays_unknown_when_neighbours_disagree(tmp_path: Path) -> None:
+    t = ctx_tagger(tmp_path)
+    assert speakers(t, 0, (OTHER, 4), (WEAK_JAY, 4), (OTHER, 4)) == ["Moses", UNKNOWN, "Moses"]
+
+
+def test_too_faint_a_match_is_not_labelled_by_context(tmp_path: Path) -> None:
+    t = ctx_tagger(tmp_path)
+    assert speakers(t, 0, (JAY, 4), (FAINT_JAY, 4)) == ["Jay", UNKNOWN]
+
+
+def test_previous_clip_carries_over_briefly(tmp_path: Path) -> None:
+    t = ctx_tagger(tmp_path)
+    assert speakers(t, 0, (JAY, 4)) == ["Jay"]
+    assert speakers(t, 10, (WEAK_JAY, 3)) == ["Jay"]  # 6 s after the last clip ended
+    assert speakers(t, 13.5, (OTHER, 1.0)) == ["Jay"]  # too short to fingerprint: inherits
+    assert speakers(t, 200, (WEAK_JAY, 3)) == [UNKNOWN]  # long silence: no carry
+
+
+def test_context_labels_do_not_train_the_library(tmp_path: Path) -> None:
+    t = ctx_tagger(tmp_path)
+    before = next(v for v in t.store.voices() if v.name == "Jay").n
+    speakers(t, 0, (JAY, 4), (WEAK_JAY, 4))
+    after = next(v for v in t.store.voices() if v.name == "Jay").n
+    assert after == before + 1  # only the confident JAY segment refined it
+
+
 # --- worker integration -------------------------------------------------------------
 
 

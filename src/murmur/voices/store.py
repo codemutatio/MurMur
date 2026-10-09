@@ -88,6 +88,15 @@ class Identity:
     voice_id: int | None
     name: str | None
     sim: float
+    # When undecided (no voice_id): the closest voice, for context-based labelling.
+    nearest_id: int | None = None
+    nearest_name: str | None = None
+
+    @property
+    def nearest_label(self) -> str | None:
+        if self.nearest_id is None:
+            return None
+        return self.nearest_name or f"voice-{self.nearest_id}"
 
     @property
     def label(self) -> str | None:
@@ -183,10 +192,10 @@ class VoiceStore:
         order = np.argsort(-sims)
         best = float(sims[order[0]])
         second = float(sims[order[1]]) if len(order) > 1 else -1.0
+        r = rows[int(order[0])]
         if best >= self.t.match and (best - second >= self.t.margin or best >= self.t.update):
-            r = rows[int(order[0])]
             return Identity(int(r[0]), r[1], best)
-        return Identity(None, None, best)
+        return Identity(None, None, best, nearest_id=int(r[0]), nearest_name=r[1])
 
     # ------------------------------------------------------------------ naming
     def voices(self) -> list[VoiceInfo]:
