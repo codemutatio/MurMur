@@ -20,6 +20,10 @@ class SegmentScore:
     no_speech_prob: float
     compression_ratio: float
     avg_logprob: float
+    # Offsets within the clip (seconds); used to slice audio per speaker turn.
+    # 0/0 when the engine doesn't report timings (e.g. the API fallback).
+    start: float = 0.0
+    end: float = 0.0
 
 
 @dataclass(frozen=True)

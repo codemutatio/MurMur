@@ -86,6 +86,8 @@ class MlxWhisperTranscriber:
                 no_speech_prob=float(s.get("no_speech_prob", 0.0)),
                 compression_ratio=float(s.get("compression_ratio", 1.0)),
                 avg_logprob=float(s.get("avg_logprob", 0.0)),
+                start=float(s.get("start", 0.0)),
+                end=float(s.get("end", 0.0)),
             )
             for s in raw.get("segments", [])
         )

@@ -20,6 +20,7 @@ import logging
 import os
 import queue
 import signal
+import sys
 import threading
 from collections.abc import Callable
 from datetime import datetime
@@ -106,6 +107,9 @@ class Runtime:
         self._capture_engine: Any = None
         self._worker: TranscribeWorker | None = None
         self._hotkey_listener: Any = None
+        self._health: Any = None
+        self._context_monitor: Any = None
+        self._voice_store: Any = None
 
         # Optional teardown hook invoked from the signal handler. Menubar mode
         # registers this so SIGTERM/SIGINT break the rumps run loop (which only
@@ -141,6 +145,29 @@ class Runtime:
         if cfg.stt.api_fallback and self._fallback is None:
             self._fallback = self._build_fallback_transcriber()
 
+        # Heartbeat for downstream tooling (.murmur-health.json next to transcripts)
+        from murmur.output.health import HEALTH_FILENAME, HealthReporter
+
+        self._health = HealthReporter(
+            cfg.storage.transcripts_dir / HEALTH_FILENAME,
+            model=cfg.stt.local_model if cfg.stt.engine == "local" else cfg.stt.api_model,
+            now=self._now,
+            is_paused=self.controller.effective_paused,
+            spool_dir=cfg.storage.spool_dir,
+            worker_pid=lambda: getattr(self._transcriber, "pid", None),
+        )
+        self._health.start()
+
+        # Call/media context: which other apps hold the mic or play audio
+        if cfg.capture.context_tags and sys.platform == "darwin":
+            from murmur.audio.context import AudioContextMonitor
+
+            self._context_monitor = AudioContextMonitor(stop=self._stop_event)
+            self._context_monitor.start()
+
+        # Speaker recognition (voice library + per-turn labels)
+        speakers = self._build_speaker_tagger()
+
         # Start worker thread
         self._worker = TranscribeWorker(
             spool_dir=cfg.storage.spool_dir,
@@ -154,6 +181,10 @@ class Runtime:
             initial_prompt=prompt,
             backlog_drained=self._backlog_drained,
             stop=self._stop_event,
+            context=self._context_monitor,
+            skip_media=cfg.capture.skip_media,
+            health=self._health,
+            speakers=speakers,
         )
         self._worker.start()
         _log.info("TranscribeWorker started")
@@ -241,6 +272,14 @@ class Runtime:
             with contextlib.suppress(Exception):
                 close()
 
+        if self._health is not None:
+            with contextlib.suppress(Exception):
+                self._health.stop()  # final heartbeat: state "stopped"
+
+        if self._voice_store is not None:
+            with contextlib.suppress(Exception):
+                self._voice_store.close()
+
         _log.info("Runtime stopped")
 
     def wait(self) -> None:
@@ -287,6 +326,7 @@ class Runtime:
     # ------------------------------------------------------------------
 
     def _build_local_transcriber(self) -> Transcriber:
+        from murmur.transcribe.healing import SelfHealingTranscriber
         from murmur.transcribe.isolated import (
             SubprocessTranscriber,
             default_memory_limit_bytes,
@@ -300,16 +340,57 @@ class Runtime:
             manager = ModelManager(
                 progress=lambda done, total: self.status.set_download(done, total),
             )
-        # Resolve (and, first run only, download) the model in THIS process — a
-        # cheap file operation that never loads MLX/Metal here. The heavy model
-        # load and all GPU allocation happen in the child process, which is torn
-        # down when idle so the always-on menubar app never pins the model in
-        # memory (see murmur.transcribe.isolated for the full rationale).
-        model_ref = manager.ensure(self._config.stt.local_model)
-        self.status.clear_download()
-        return SubprocessTranscriber(
-            model_ref,
-            memory_limit_bytes=default_memory_limit_bytes(),
+        mem_limit = default_memory_limit_bytes()
+
+        def _ensure(model: str) -> str:
+            # Resolve (and, first run / after a cache wipe, download) the model in
+            # THIS process — a cheap file op that never loads MLX/Metal here. The
+            # heavy model load and GPU allocation happen in the child process,
+            # torn down when idle (see murmur.transcribe.isolated).
+            ref = manager.ensure(model)
+            self.status.clear_download()
+            return ref
+
+        # SelfHealingTranscriber re-runs _ensure (re-downloading) if the weights
+        # ever disappear at runtime, so a cache wipe self-recovers instead of
+        # failing every segment until restart.
+        return SelfHealingTranscriber(
+            model_name=self._config.stt.local_model,
+            ensure=_ensure,
+            build_inner=lambda ref: SubprocessTranscriber(ref, memory_limit_bytes=mem_limit),
+        )
+
+    def _build_speaker_tagger(self) -> Any:
+        """SpeakerTagger, or None if disabled or SpeechBrain isn't installed."""
+        import importlib.util
+
+        vcfg = self._config.voices
+        if not vcfg.enabled:
+            return None
+        if importlib.util.find_spec("speechbrain") is None:
+            _log.warning("Speaker recognition disabled: speechbrain is not installed")
+            return None
+        from murmur.voices.embedder import SpeakerEmbedder
+        from murmur.voices.store import Thresholds, VoiceStore
+        from murmur.voices.tagger import SpeakerTagger
+
+        try:
+            store = VoiceStore(
+                self._paths.home / "voices" / "voices.db",
+                Thresholds(match=vcfg.match_threshold, new=vcfg.new_voice_threshold),
+            )
+            store.prune()
+        except Exception as exc:
+            _log.warning("Speaker recognition disabled: voice library unavailable: %s", exc)
+            return None
+        self._voice_store = store
+        tdir = self._config.storage.transcripts_dir
+        return SpeakerTagger(
+            store,
+            SpeakerEmbedder(),
+            self_name=vcfg.self_name,
+            export_path=tdir / ".voices.json",
+            hints_dir=tdir / ".speaker-hints",
         )
 
     def _build_fallback_transcriber(self) -> Transcriber | None:

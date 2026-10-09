@@ -11,13 +11,37 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- **Model weights no longer live in `~/.cache` (silent-outage fix)** — `ModelManager` now stores Whisper weights under the app support dir (`~/Library/Application Support/Murmur/models/`, honoring `$MURMUR_HOME`) instead of `~/.cache/huggingface`. A cache directory is exactly what macOS "Optimize Storage" and cleanup tools delete, and it had wiped the weights repeatedly — breaking transcription silently (every segment failing with `Repo id must be in the form …`) until a manual re-download. Paired with a new `SelfHealingTranscriber` that re-downloads the model and retries once if the weights disappear at runtime, so the always-on app and server recover on their own instead of failing until a restart.
 - **Unbounded VAD memory growth** — the Silero VAD ran on every ~32 ms audio frame without `torch.no_grad()`. Because the model is stateful (carries recurrent state across frames), autograd chained each frame's graph to the previous one, growing ~26 KB/frame — several GB over a multi-hour always-on session (observed 6 GB / 2.5 h, mostly swapped). Now wrapped in `torch.no_grad()`; memory stays flat. Was previously masked by the much larger MLX leak.
 
 ### Changed
 
 - **Transcription now runs in a recyclable subprocess** instead of a thread inside the menubar app. MLX's Metal buffer pool grew to the peak working set and was never released, pinning ~15 GB in the always-on process (observed peak 81 GB). The model now lives in a child process that is torn down after 120 s idle, so the OS reclaims all GPU memory between dictation sessions; the menubar app stays at ~20 MB. Inside the child: `set_cache_limit(0)` + `clear_cache()` after each segment, and `set_memory_limit(~70% RAM)` as a hard ceiling so no single segment can trigger a swap storm.
+- **Server transcription now runs in a recyclable subprocess** (`SubprocessTranscriber`) instead of an in-process `MlxWhisperTranscriber`. The MLX model's Metal buffer pool grew to the peak working set and was never released, pinning ~4.5 GB in the always-on launchd server for its whole lifetime. The model now lives in a child process torn down after 120 s idle, so memory is reclaimed between requests; the server process stays lean. Inside the child: `set_cache_limit(0)` + `clear_cache()` after each segment, and `set_memory_limit(~70% RAM)` as a hard ceiling. The transcriber is closed on server shutdown so no child outlives a launchd restart.
 - **Default `local_model` is now `large-v3-turbo`** (~4× faster, lower memory) rather than `large-v3`. Set `local_model = "large-v3"` in config to restore the previous model.
 - **Default `max_segment_s` lowered from 120 s to 30 s** — Whisper's native window is 30 s, so longer segments only inflated the per-call working set without improving accuracy.
+
+## [1.0.0] — 2026-06-14
+
+### Added
+
+- **Murmur Server** (`src/murmur/server/`) — FastAPI HTTP service wrapping the existing `MlxWhisperTranscriber` for use by Murmur Mobile (Android).
+  - `GET /health` — bearer-token-gated liveness and readiness check. Returns `{"status","model_loaded","model","version"}`. Never acquires the transcription lock; responds < 500 ms regardless of in-progress transcription (AC-1 through AC-3, AC-13).
+  - `POST /transcribe` — multipart upload (m4a/aac/wav/mp3/ogg/opus, max 25 MB). Decodes audio via `ffmpeg` subprocess to float32 mono 16 kHz PCM, transcribes with `MlxWhisperTranscriber` (large-v3), applies `build_initial_prompt()` vocab hints, runs `clean_result()` hallucination guard, returns JSON `{text, segments, language, duration_sec, model, engine}` (AC-4 through AC-18).
+  - Single-flight `asyncio.Lock` with atomic acquire — concurrent `POST /transcribe` receives immediate 503 `model_busy`; no waiter queue (AC-14, ADR-2, R3-1 fix).
+  - 10-code error registry: `unauthorized`, `model_busy`, `model_not_loaded`, `missing_file`, `empty_file`, `file_too_large`, `unsupported_media_type`, `audio_decode_failed`, `transcription_failed`, `no_speech_detected`.
+  - Bearer token read from `MURMUR_SERVER_TOKEN` env or macOS Keychain (`murmur-server-token`); constant-time `hmac.compare_digest` comparison; token never logged (AC-15, AC-17, R-7).
+  - `server.toml` config: `[server]`, `[stt]`, `[clean]` (parsed and ignored); missing/malformed → defaults + warning, no crash (AC-16).
+  - launchd user agent (`com.jay.murmur-server.plist`): `KeepAlive=true`, `RunAtLoad=true`, `caffeinate -i` power assertion, single-instance PID-file belt at `/tmp/murmur-server.pid` (AC-19, R-16, R-17).
+  - Server binds `127.0.0.1` only; exposed via `tailscale serve --bg https / http://127.0.0.1:8080` (R-8, R-9).
+  - Structured logs to `~/Library/Logs/murmur-server.log`; audio bytes and transcript text never logged (R-10, R-18).
+  - 358 tests (including 3 added in post-escalation R3-1 fix); 86.76% coverage on new server code; ruff and mypy clean.
+
+### Changed
+
+- Bumped package version `0.1.0` → `1.0.0` to reflect the first production-ready release shipping the server component. The `/health` `version` field reports `"1.0.0"`.
+
+---
 
 ## [0.1.0] — 2026-06-12
 
