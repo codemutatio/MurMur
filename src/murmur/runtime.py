@@ -154,6 +154,7 @@ class Runtime:
             now=self._now,
             is_paused=self.controller.effective_paused,
             spool_dir=cfg.storage.spool_dir,
+            worker_pid=lambda: getattr(self._transcriber, "pid", None),
         )
         self._health.start()
 
