@@ -4,6 +4,13 @@ For each Whisper segment long enough to fingerprint (>= ``min_embed_s``), the
 audio slice is embedded and matched against the voice library; shorter
 segments inherit the previous speaker. Consecutive segments with the same
 speaker become one turn, written as its own transcript entry.
+
+Context fills the gaps the library won't decide alone: a clip that is only a
+weak match (between "new voice" and "match") takes the label of a neighbouring
+speaker when that speaker is also its closest voice. Neighbours include the end
+of the previous clip if it finished moments ago — most clips are a single
+2-3 s utterance, so the "previous speaker" usually lives in the last clip.
+These labels are display-only; the voice library is not updated from them.
 """
 
 from __future__ import annotations
@@ -19,7 +26,7 @@ import numpy as np
 from murmur.transcribe.base import SegmentScore
 from murmur.transcribe.guard import segment_survives
 from murmur.voices.embedder import SAMPLE_RATE, SpeakerEmbedder
-from murmur.voices.store import VoiceStore
+from murmur.voices.store import Identity, VoiceStore
 
 _log = logging.getLogger(__name__)
 
@@ -43,6 +50,8 @@ class SpeakerTagger:
         export_path: Path | None = None,
         hints_dir: Path | None = None,
         min_embed_s: float = 1.5,  # ECAPA on ~1 s of call audio is mostly noise
+        smooth_min_sim: float = 0.30,  # weakest match that context may label
+        carry_s: float = 15.0,  # a clip this soon after the last still continues it
         maintenance_interval_s: float = 300.0,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -56,6 +65,10 @@ class SpeakerTagger:
         self._clock = clock
         self._last_maintenance = float("-inf")
         self._embed_failed = False
+        self._smooth_min_sim = smooth_min_sim
+        self._carry_s = carry_s
+        self._last_label = UNKNOWN
+        self._last_end_ts = float("-inf")
 
     def turns(
         self,
@@ -70,17 +83,37 @@ class SpeakerTagger:
             return []
         if all(s.end <= 0 for s in segs):
             return None
-        labelled: list[tuple[SegmentScore, str]] = []
-        prev = UNKNOWN
+        # Pass 1: fingerprint what is long enough. None = too short / failed.
+        idents: list[Identity | None] = []
         for s in segs:
-            label = prev
-            dur = max(0.0, s.end - s.start)
-            if dur >= self._min_embed_s:
+            ident = None
+            if max(0.0, s.end - s.start) >= self._min_embed_s:
                 a = audio[int(s.start * SAMPLE_RATE) : int(s.end * SAMPLE_RATE)]
                 if len(a) >= self._min_embed_s * SAMPLE_RATE:
-                    label = self._identify(a, start_ts + s.start, len(a) / SAMPLE_RATE, context, prev)
+                    ident = self._identify(a, start_ts + s.start, len(a) / SAMPLE_RATE, context)
+            idents.append(ident)
+
+        # Pass 2: label, using neighbours for short and undecided segments.
+        recent = start_ts - self._last_end_ts <= self._carry_s
+        prev = self._last_label if recent else UNKNOWN
+        labelled: list[tuple[SegmentScore, str]] = []
+        for i, (s, ident) in enumerate(zip(segs, idents, strict=True)):
+            if ident is None:
+                label = prev
+            elif ident.label is not None:
+                label = ident.label
+            elif ident.nearest_label is not None and ident.sim >= self._smooth_min_sim and (
+                ident.nearest_label in (prev, self._next_decided(idents, i))
+            ):
+                label = ident.nearest_label
+            else:
+                label = UNKNOWN
             labelled.append((s, label))
             prev = label
+
+        end_seg, end_label = labelled[-1]
+        self._last_label = end_label
+        self._last_end_ts = start_ts + max(end_seg.end, 0.0)
 
         result: list[Turn] = []
         for s, label in labelled:
@@ -92,18 +125,25 @@ class SpeakerTagger:
                 result.append(Turn(max(0.0, s.start), text, label))
         return result
 
+    @staticmethod
+    def _next_decided(idents: Sequence[Identity | None], i: int) -> str | None:
+        for ident in idents[i + 1 :]:
+            if ident is not None and ident.label is not None:
+                return ident.label
+        return None
+
     def _identify(
-        self, audio: np.ndarray, ts: float, dur: float, context: str | None, prev: str
-    ) -> str:
+        self, audio: np.ndarray, ts: float, dur: float, context: str | None
+    ) -> Identity | None:
         try:
             ident = self.store.identify(self._embedder.embed(audio), ts=ts, dur=dur, context=context)
         except Exception as exc:
             if not self._embed_failed:
                 _log.warning("Speaker identification unavailable: %s", exc, exc_info=True)
                 self._embed_failed = True
-            return prev
+            return None
         self._embed_failed = False
-        return ident.label or UNKNOWN
+        return ident
 
     def maintenance(self, *, force: bool = False) -> None:
         """Tidy the library, learn names (self, calendar hints), export the list.
