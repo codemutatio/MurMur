@@ -7,7 +7,12 @@ requires-python = ">=3.11"
 dependencies = [
     "mlx-whisper>=0.4.1",
     "silero-vad>=5.1",
-    "torch>=2.0",
+    # torch and torchaudio must be a matched pair (torchaudio's compiled ops are
+    # built per torch release). torchaudio stopped at 2.11 while torch moved on,
+    # and torchaudio doesn't declare its torch version — unpinned, installs paired
+    # torch 2.14 with torchaudio 2.11. SpeechBrain requires torchaudio.
+    "torch>=2.11,<2.12",
+    "torchaudio>=2.11,<2.12",
     "sounddevice>=0.5.1",
     "numpy>=1.24",
     "rumps>=0.4.0",
@@ -19,6 +24,7 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "python-multipart>=0.0.18",
+    "speechbrain>=1.0",  # speaker recognition (murmur.voices)
 ]
 
 [project.scripts]
@@ -103,6 +109,10 @@ module = [
     "PyObjCTools.*",
     "torch",
     "torch.*",
+    "speechbrain",
+    "speechbrain.*",
+    "soundfile",
+    "soundfile.*",
 ]
 ignore_missing_imports = true
 

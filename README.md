@@ -183,6 +183,14 @@ open -a Murmur
 
 The build uses py2app in *alias* mode against the uv tool env in `~/.local`, so it is fast and does not bundle the multi-GB model stack. It is ad-hoc signed for this machine (not distributable). Re-run `packaging/build_app.sh` after code changes.
 
+For code-only changes you don't need to rebuild the `.app` — refresh the environment it runs on, then restart the app:
+
+```bash
+scripts/install_app_env.sh
+```
+
+Always use this script rather than a bare `uv tool install .`: it pins the app to `uv.lock` and the repo's Python version (`.python-version`), so the app runs the same versions the tests did. A bare install ignores the lockfile — it once moved the app to Python 3.12 (the 3.11-built `.app` then crashed) and paired torch 2.14 with torchaudio 2.11.
+
 **Window UI** — open it from the menubar's **Open Murmur Window** item:
 - **Today** — live status and an auto-refreshing transcript, with pause controls.
 - **History** — pick a past day and read its transcript.

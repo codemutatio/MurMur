@@ -243,6 +243,12 @@ class SubprocessTranscriber:
             msg = reply[1] if isinstance(reply, tuple) and len(reply) == 2 else reply
             raise TranscriptionError(str(msg))
 
+    @property
+    def pid(self) -> int | None:
+        """The worker's pid while it is running (None when released or dead)."""
+        proc = self._proc  # no lock: transcribe() holds it for whole requests
+        return proc.pid if proc is not None and proc.poll() is None else None
+
     # -- Lifecycle -----------------------------------------------------------
     def close(self) -> None:
         """Terminate the child and stop the reaper. Idempotent."""

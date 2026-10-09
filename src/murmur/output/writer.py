@@ -29,8 +29,13 @@ class TranscriptWriter:
         self._dir = transcripts_dir
         self._now = now
 
-    def append(self, start_at: datetime, text: str) -> Path:
+    def append(self, start_at: datetime, text: str, context: str | None = None) -> Path:
         """Append *text* to the transcript for *start_at*'s date.
+
+        *context* (e.g. ``"media app=com.google.Chrome"``) is written as an HTML
+        comment on the line above the entry: invisible when the Markdown is
+        rendered, ignored by every line parser (they match only ``**[HH:MM]**``
+        lines), but readable by the nightly processing task.
 
         Returns:
             Path to the transcript file.
@@ -54,6 +59,8 @@ class TranscriptWriter:
         # wall-clock time on the user's machine, not the datetime's stored tz.
         local_start = start_at.astimezone()
         new_line = f"**[{local_start:%H:%M}]** {text}\n\n"
+        if context:
+            new_line = f"<!-- murmur: {context.replace('--', '-')} -->\n" + new_line
         content = existing + new_line
 
         # Write to temp, fsync, then atomically replace (ADR-2, R-9)

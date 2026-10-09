@@ -18,7 +18,8 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "==> Installing murmur + py2app into the uv tool env (~/.local)…"
-( cd "$REPO" && uv tool install . --with py2app --with 'setuptools<80' --force )
+# Pinned to uv.lock + .python-version (see scripts/install_app_env.sh for why).
+"$REPO/scripts/install_app_env.sh" --with py2app --with 'setuptools<80'
 
 TOOL_PY="$(uv tool dir)/murmur/bin/python"
 if [[ ! -x "$TOOL_PY" ]]; then

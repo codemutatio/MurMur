@@ -11,7 +11,7 @@ Survivors are joined with " ". Returns None when nothing survives (AC-3, E-7, E-
 
 from __future__ import annotations
 
-from murmur.transcribe.base import TranscriptionResult
+from murmur.transcribe.base import SegmentScore, TranscriptionResult
 
 # Thresholds (named constants per OQ-2; not user-facing config in v1)
 NO_SPEECH_PROB_MAX: float = 0.6
@@ -56,20 +56,20 @@ def clean_result(r: TranscriptionResult) -> str | None:
         Joined text of surviving segments, or None if nothing survives.
         None is treated as no-speech by the caller (no append, no error count).
     """
-    survivors: list[str] = []
-    for seg in r.segments:
-        text = seg.text.strip()
-        if not text:
-            continue
-        normalized = text.lower().rstrip(".")
-        if normalized in FILLER_PHRASES or text in FILLER_PHRASES:
-            continue
-        if seg.no_speech_prob > NO_SPEECH_PROB_MAX and seg.avg_logprob < AVG_LOGPROB_MIN:
-            continue
-        if seg.compression_ratio > COMPRESSION_RATIO_MAX:
-            continue
-        survivors.append(text)
-
+    survivors = [seg.text.strip() for seg in r.segments if segment_survives(seg)]
     if not survivors:
         return None
     return " ".join(survivors)
+
+
+def segment_survives(seg: SegmentScore) -> bool:
+    """True if a single Whisper segment passes the hallucination guard."""
+    text = seg.text.strip()
+    if not text:
+        return False
+    normalized = text.lower().rstrip(".")
+    if normalized in FILLER_PHRASES or text in FILLER_PHRASES:
+        return False
+    if seg.no_speech_prob > NO_SPEECH_PROB_MAX and seg.avg_logprob < AVG_LOGPROB_MIN:
+        return False
+    return seg.compression_ratio <= COMPRESSION_RATIO_MAX

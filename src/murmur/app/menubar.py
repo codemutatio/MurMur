@@ -51,6 +51,16 @@ class MurmurApp(rumps.App):  # type: ignore[misc]
         self._config_file = config_file
         self._window_controller: Any | None = None  # built lazily on first open
         self._shutting_down = False
+        self._runtime_stopped = False
+        # Every way the app can terminate — menubar Quit, but also an AppleEvent
+        # quit (logout/restart/shutdown, `osascript … to quit`, Activity Monitor)
+        # which goes straight to NSApplication terminate: and never reaches
+        # _teardown — passes through rumps' applicationWillTerminate_, which
+        # emits before_quit. Stopping the runtime there flushes the partial
+        # segment, writes the "stopped" heartbeat, and stops the capture thread
+        # before Python tears down torch under it (which logged "Segmenter
+        # error" PyTorch asserts on every such quit).
+        rumps.events.before_quit.register(self._stop_runtime_once)
 
         # Menu items (order matches R-12)
         self._item_pause_resume = rumps.MenuItem("Pause", callback=self._on_pause_resume)
@@ -179,8 +189,15 @@ class MurmurApp(rumps.App):  # type: ignore[misc]
         if self._shutting_down:
             return
         self._shutting_down = True
+        self._stop_runtime_once()
+        rumps.quit_application()
+
+    def _stop_runtime_once(self) -> None:
+        """Stop the runtime exactly once (teardown and before_quit both call this)."""
+        if self._runtime_stopped:
+            return
+        self._runtime_stopped = True
         try:
             self._runtime.stop()
         except Exception as exc:
             _log.error("Error during stop: %s", exc)
-        rumps.quit_application()
