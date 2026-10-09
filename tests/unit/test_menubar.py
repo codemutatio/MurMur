@@ -148,6 +148,29 @@ def test_teardown_is_idempotent(tmp_path: Path, mock_rumps: MagicMock) -> None:
     mock_rumps.quit_application.assert_called_once_with()
 
 
+def test_appleevent_quit_stops_runtime_via_before_quit(tmp_path: Path, mock_rumps: MagicMock) -> None:
+    """A system quit (logout/restart, `osascript … to quit`) skips _teardown and
+    goes straight to applicationWillTerminate → before_quit; the runtime must
+    still be stopped there (regression: capture thread outlived torch)."""
+    app, _ = _make_app(tmp_path, mock_rumps)
+    mock_rumps.events.before_quit.register.assert_called_once_with(app._stop_runtime_once)
+
+    app._stop_runtime_once()  # what rumps' applicationWillTerminate_ triggers
+
+    app._runtime.stop.assert_called_once_with()
+
+
+def test_menubar_quit_then_before_quit_stops_once(tmp_path: Path, mock_rumps: MagicMock) -> None:
+    """Menu Quit runs _teardown, whose quit_application then fires before_quit too."""
+    app, _ = _make_app(tmp_path, mock_rumps)
+
+    app._teardown()
+    app._stop_runtime_once()
+
+    app._runtime.stop.assert_called_once_with()
+    mock_rumps.quit_application.assert_called_once_with()
+
+
 def test_on_quit_delegates_to_teardown(tmp_path: Path, mock_rumps: MagicMock) -> None:
     """The Quit menu item runs the same teardown as the signal path."""
     app, _ = _make_app(tmp_path, mock_rumps)

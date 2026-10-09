@@ -18,7 +18,9 @@ import logging
 import queue
 import threading
 import time
+from datetime import timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING, Protocol
 
 from murmur.audio.spool import list_spool, load_wav, parse_segment_start
 from murmur.control import StatusBoard
@@ -26,7 +28,26 @@ from murmur.output.writer import TranscriptWriter
 from murmur.transcribe.base import Transcriber, TranscriptionError
 from murmur.transcribe.guard import clean_result
 
+if TYPE_CHECKING:
+    from murmur.audio.context import SegmentContext
+    from murmur.output.health import HealthReporter
+    from murmur.voices.tagger import SpeakerTagger
+
 _log = logging.getLogger(__name__)
+
+
+class ContextLabeler(Protocol):
+    def label(self, start: float, end: float) -> SegmentContext | None: ...
+
+
+def _marker(seg_ctx: SegmentContext | None, speaker: str | None) -> str | None:
+    """Comment text for an entry: call/media context and/or speaker."""
+    parts = []
+    if seg_ctx is not None:
+        parts.append(seg_ctx.marker())
+    if speaker:
+        parts.append(f'speaker="{speaker.replace(chr(34), "")}"')
+    return " ".join(parts) or None
 
 
 class TranscribeWorker(threading.Thread):
@@ -48,8 +69,16 @@ class TranscribeWorker(threading.Thread):
         stop: threading.Event,
         max_local_failures: int = 3,
         backoff_s: float = 30.0,
+        context: ContextLabeler | None = None,
+        skip_media: bool = False,
+        health: HealthReporter | None = None,
+        speakers: SpeakerTagger | None = None,
     ) -> None:
         super().__init__(name="transcribe-worker", daemon=True)
+        self._speakers = speakers
+        self._context = context
+        self._skip_media = skip_media
+        self._health = health
         self._spool_dir = spool_dir
         self._work_q = work_q
         self._transcriber = transcriber
@@ -66,6 +95,8 @@ class TranscribeWorker(threading.Thread):
 
     def run(self) -> None:
         # Startup: drain existing spool before signalling backlog_drained (E-6, R-16)
+        if self._speakers is not None:
+            self._speakers.maintenance(force=True)
         existing = list_spool(self._spool_dir)
         _log.info("Startup scan: %d spool files", len(existing))
         for wav_path in existing:
@@ -102,7 +133,7 @@ class TranscribeWorker(threading.Thread):
             audio = load_wav(wav_path)
         except Exception as exc:
             _log.error("Failed to load %s: %s", wav_path, exc)
-            self._status.increment_errors()
+            self._error(f"load failed: {exc}")
             return
 
         # Guard against non-conforming filenames (security finding folded into F-4).
@@ -115,6 +146,22 @@ class TranscribeWorker(threading.Thread):
                 wav_path.name,
                 exc,
             )
+            return
+
+        audio_s = len(audio) / 16_000.0
+
+        # Was a call app using the mic, or an app playing audio, while this was
+        # captured? (murmur.audio.context) — tags the entry; optionally skips media.
+        seg_ctx = None
+        if self._context is not None:
+            start_ts = start_at.timestamp()
+            seg_ctx = self._context.label(start_ts, start_ts + audio_s)
+        if seg_ctx is not None and seg_ctx.kind == "media" and self._skip_media:
+            _log.info("Skipping %s: media playing (%s)", wav_path.name, seg_ctx.app)
+            if self._health is not None:
+                self._health.record_context("media", skipped=True)
+            if not self._keep_audio:
+                wav_path.unlink(missing_ok=True)
             return
 
         t0 = time.monotonic()
@@ -159,7 +206,7 @@ class TranscribeWorker(threading.Thread):
                         break
                     except TranscriptionError as api_exc:
                         _log.error("API fallback failed for %s: %s", wav_path.name, api_exc)
-                        self._status.increment_errors()
+                        self._error(f"API fallback failed: {api_exc}")
                         _log.info("Backing off %.0f s after fallback failure", self._backoff_s)
                         # Sleep in small chunks so stop event is honoured
                         chunk = min(0.05, self._backoff_s)
@@ -171,7 +218,7 @@ class TranscribeWorker(threading.Thread):
                 else:
                     # No fallback — leave WAV in spool, increment errors (AC-7)
                     _log.error("No fallback configured; leaving %s in spool", wav_path.name)
-                    self._status.increment_errors()
+                    self._error(f"local transcription failed: {exc}")
                     return
             except Exception as exc:
                 # Unexpected exception (numpy/mlx panic, MemoryError, etc.) — log,
@@ -183,14 +230,15 @@ class TranscribeWorker(threading.Thread):
                     wav_path.name,
                     exc,
                 )
-                self._status.increment_errors()
+                self._error(f"unexpected: {exc!r}")
                 return
 
         if result is None:
             return
+        if self._health is not None:
+            self._health.record_success()
 
         wall_s = time.monotonic() - t0
-        audio_s = len(audio) / 16_000.0
         rtf = audio_s / wall_s if wall_s > 0 else 0.0
         _log.info(
             "Transcribed %s: %.1f s audio in %.1f s wall (RTF %.2fx)%s",
@@ -201,16 +249,39 @@ class TranscribeWorker(threading.Thread):
             " [fallback]" if used_fallback else "",
         )
 
-        text = clean_result(result)
-        if text:
+        # One entry per speaker turn when speaker ID is on and the engine gave
+        # segment timings; otherwise the whole clip is one entry as before.
+        turns = None
+        if self._speakers is not None:
+            turns = self._speakers.turns(
+                audio,
+                start_at.timestamp(),
+                result.segments,
+                seg_ctx.kind if seg_ctx is not None else None,
+            )
+        if turns is not None:
+            entries = [
+                (start_at + timedelta(seconds=t.offset_s), t.text, _marker(seg_ctx, t.speaker))
+                for t in turns
+            ]
+        else:
+            text = clean_result(result)
+            entries = [(start_at, text, _marker(seg_ctx, None))] if text else []
+
+        if entries:
             try:
-                self._writer.append(start_at, text)
+                for at, text, marker in entries:
+                    self._writer.append(at, text, context=marker)
             except OSError as exc:
                 _log.error("Failed to write transcript: %s", exc)
-                self._status.increment_errors()
+                self._error(f"transcript write failed: {exc}")
                 return
+            if seg_ctx is not None and self._health is not None:
+                self._health.record_context(seg_ctx.kind)
         else:
             _log.debug("Guard dropped all segments for %s", wav_path.name)
+        if self._speakers is not None:
+            self._speakers.maintenance()
 
         # Delete WAV unless keep_audio (AC-1/AC-2)
         if not self._keep_audio:
@@ -218,3 +289,9 @@ class TranscribeWorker(threading.Thread):
                 wav_path.unlink(missing_ok=True)
             except OSError as exc:
                 _log.warning("Could not delete %s: %s", wav_path.name, exc)
+
+    def _error(self, message: str) -> None:
+        """Count a failure on the status board and, if enabled, the heartbeat."""
+        self._status.increment_errors()
+        if self._health is not None:
+            self._health.record_error(message)

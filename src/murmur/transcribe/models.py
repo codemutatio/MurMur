@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,25 @@ MODEL_REPOS: dict[str, str] = {
 }
 
 
+def default_model_cache_dir() -> Path:
+    """Persistent, app-owned directory for model weights.
+
+    Deliberately OUTSIDE ``~/.cache``: that is a cache directory, which macOS
+    "Optimize Storage" and third-party cleanup tools delete at will — and it has
+    wiped Murmur's Whisper weights repeatedly, silently breaking transcription
+    until a re-download. The weights the app depends on belong under the app
+    support directory, which nothing sweeps. Honors ``$MURMUR_HOME`` (test
+    isolation / relocation), matching murmur.paths.resolve_paths.
+    """
+    raw_home = os.environ.get("MURMUR_HOME", "")
+    home = (
+        Path(raw_home).expanduser()
+        if raw_home
+        else Path("~/Library/Application Support/Murmur").expanduser()
+    )
+    return home / "models"
+
+
 class ChecksumError(Exception):
     """Raised when a downloaded model file fails sha256 verification."""
 
@@ -30,7 +50,9 @@ class ModelManager:
     """Download and verify Whisper model weights from Hugging Face.
 
     Args:
-        cache_dir: Override the default HF cache directory (tests use a tmp dir).
+        cache_dir: Model cache directory. Defaults to
+            :func:`default_model_cache_dir` (the persistent app-owned location,
+            NOT ``~/.cache``). Tests pass a tmp dir.
         api: HfApi instance (inject a fake in tests).
         progress: Callback for download progress: (bytes_done, bytes_total) → None.
     """
@@ -41,7 +63,7 @@ class ModelManager:
         api: Any | None = None,
         progress: Callable[[int, int], None] | None = None,
     ) -> None:
-        self._cache_dir = cache_dir
+        self._cache_dir = cache_dir if cache_dir is not None else default_model_cache_dir()
         self._api = api
         self._progress = progress
 

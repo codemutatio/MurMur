@@ -11,6 +11,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- **Model weights no longer live in `~/.cache` (silent-outage fix)** — `ModelManager` now stores Whisper weights under the app support dir (`~/Library/Application Support/Murmur/models/`, honoring `$MURMUR_HOME`) instead of `~/.cache/huggingface`. A cache directory is exactly what macOS "Optimize Storage" and cleanup tools delete, and it had wiped the weights repeatedly — breaking transcription silently (every segment failing with `Repo id must be in the form …`) until a manual re-download. Paired with a new `SelfHealingTranscriber` that re-downloads the model and retries once if the weights disappear at runtime, so the always-on app and server recover on their own instead of failing until a restart.
 - **Unbounded VAD memory growth** — the Silero VAD ran on every ~32 ms audio frame without `torch.no_grad()`. Because the model is stateful (carries recurrent state across frames), autograd chained each frame's graph to the previous one, growing ~26 KB/frame — several GB over a multi-hour always-on session (observed 6 GB / 2.5 h, mostly swapped). Now wrapped in `torch.no_grad()`; memory stays flat. Was previously masked by the much larger MLX leak.
 
 ### Changed

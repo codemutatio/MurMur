@@ -27,11 +27,15 @@ htmlcov/
 
 # Murmur runtime (never commit sensitive runtime artifacts)
 *.lock
+# …but uv.lock is the dependency lockfile, not a runtime lock: the app env is
+# installed from it (scripts/install_app_env.sh), so it must be versioned.
+!uv.lock
 state.json
 
 # Test artefacts
 *.wav
 bakeoff-*.md
-
-
+branch_structure.json
+temp_auto_push.bat
+temp_interactive_push.bat
 .gitignore

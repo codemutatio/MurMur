@@ -11,6 +11,12 @@ silence_split_s = 1.5
 # Maximum segment duration before a force-split (seconds). Whisper's native
 # window is 30 s; longer segments only inflate transcription memory.
 max_segment_s = 30.0
+# Tag entries captured while another app used the mic (a call) or played audio
+# (media) — written as an invisible <!-- murmur: ... --> line above the entry.
+context_tags = true
+# Don't transcribe segments captured while media was playing. Off by default:
+# it would also drop you talking over music or a video.
+skip_media = false
 
 [stt]
 # Local model: "large-v3-turbo" (~4x faster, lower memory) or "large-v3"
