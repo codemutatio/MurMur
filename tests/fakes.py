@@ -42,6 +42,8 @@ class FakeAudioSource:
         self._open_count: int = 0
         self._closed: bool = True
         self._lock = threading.Lock()
+        self.close_stuck: bool = False  # close() raises AudioSourceStuckError
+        self.close_calls: int = 0
 
     # --- AudioSource protocol ---
 
@@ -54,6 +56,11 @@ class FakeAudioSource:
 
     def close(self) -> None:
         with self._lock:
+            self.close_calls += 1
+            if self.close_stuck and not self._closed:
+                from murmur.audio.source import AudioSourceStuckError
+
+                raise AudioSourceStuckError("stream close did not return within 10 s")
             self._closed = True
 
     def read(self, timeout: float) -> np.ndarray | None:  # noqa: ARG002

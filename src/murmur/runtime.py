@@ -155,6 +155,7 @@ class Runtime:
             is_paused=self.controller.effective_paused,
             spool_dir=cfg.storage.spool_dir,
             worker_pid=lambda: getattr(self._transcriber, "pid", None),
+            audio=lambda: self._capture_engine.audio_status() if self._capture_engine else None,
         )
         self._health.start()
 
@@ -227,6 +228,7 @@ class Runtime:
             backlog_drained=self._backlog_drained,
             stop=self._stop_event,
             device=cfg.capture.device,
+            on_stuck=self._on_audio_stuck,
         )
         self._capture_engine.start()
         _log.info("CaptureEngine started")
@@ -247,6 +249,68 @@ class Runtime:
         # mode additionally registers a shutdown hook (set_signal_shutdown_hook)
         # to break the rumps run loop.
         self.install_signal_handlers()
+
+    # -- audio-stack recovery ------------------------------------------------
+    # Three relaunches inside this window means the audio stack is broken
+    # system-wide (not just in our process): stop looping and say so.
+    _RESTART_WINDOW_S = 1800.0
+    _MAX_RESTARTS = 3
+
+    def _on_audio_stuck(self, reason: str) -> None:
+        """Capture hung inside CoreAudio; only a fresh process recovers it."""
+        import json
+        import time
+
+        log_path = self._paths.home / "audio-restarts.json"
+        now = time.time()
+        try:
+            recent = [t for t in json.loads(log_path.read_text()) if now - t < self._RESTART_WINDOW_S]
+        except (OSError, ValueError, TypeError):
+            recent = []
+        if len(recent) >= self._MAX_RESTARTS:
+            _log.error(
+                "Audio input stuck again (%s) after %d restarts in %d min; not relaunching. "
+                "Restart the Mac to reset CoreAudio.",
+                reason, len(recent), self._RESTART_WINDOW_S // 60,
+            )
+            self._notifier.notify("Murmur", "Microphone keeps getting stuck. Please restart your Mac.")
+            return
+        with contextlib.suppress(OSError):
+            log_path.write_text(json.dumps([*recent, now]))
+        if self._health is not None:
+            with contextlib.suppress(Exception):
+                self._health.write()  # leaves state "mic_stuck" for anyone looking
+        self._relaunch()
+
+    def _relaunch(self) -> None:
+        """Exit now (no graceful stop: it would touch the hung stream again).
+
+        Murmur.app relaunches itself via LaunchServices a moment after exiting;
+        the headless agent exits 75 so launchd's KeepAlive restarts it. Spooled
+        audio is on disk and picked up by the next process's startup scan.
+        """
+        import subprocess
+
+        if getattr(sys, "frozen", None) == "macosx_app":
+            bundle_id = "com.jay.murmur"
+            with contextlib.suppress(Exception):
+                from Foundation import NSBundle
+
+                bundle_id = str(NSBundle.mainBundle().bundleIdentifier() or bundle_id)
+            subprocess.Popen(
+                ["/bin/sh", "-c", 'sleep 3; /usr/bin/open -b "$0"', bundle_id],
+                start_new_session=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            _log.error("Relaunching Murmur.app to recover the microphone")
+            code = 0
+        else:
+            _log.error("Exiting (code 75) so the launchd agent restarts Murmur")
+            code = 75
+        logging.shutdown()
+        os._exit(code)
 
     def stop(self, timeout: float = 10.0) -> None:
         """Stop all threads gracefully."""

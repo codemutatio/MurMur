@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from murmur.audio.source import SounddeviceSource
+import threading
+import time
+
+import pytest
+
+from murmur.audio.source import AudioSourceError, AudioSourceStuckError, SounddeviceSource
 
 
 # F-6: ADR-1 — callback must not write instance state
@@ -25,3 +30,46 @@ def test_sounddevice_source_callback_owns_no_instance_state_f6() -> None:
     assert not hasattr(src, "dropped_frames"), (
         "SounddeviceSource.dropped_frames property must not exist after F-6 fix"
     )
+
+
+# --- hung CoreAudio calls (2026-11-04: stop() deadlocked after sleep/wake) -------------
+
+
+class _HangingStream:
+    def __init__(self) -> None:
+        self.release = threading.Event()
+
+    def stop(self) -> None:
+        self.release.wait(5)
+
+    def close(self) -> None:
+        pass
+
+
+def test_hung_stream_close_raises_stuck_quickly() -> None:
+    src = SounddeviceSource(call_timeout_s=0.2)
+    hanging = _HangingStream()
+    src._stream = hanging
+    t0 = time.monotonic()
+    with pytest.raises(AudioSourceStuckError):
+        src.close()
+    assert time.monotonic() - t0 < 2
+    hanging.release.set()
+
+
+def test_after_a_hang_portaudio_is_never_touched_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    src = SounddeviceSource(call_timeout_s=0.2)
+    hanging = _HangingStream()
+    src._stream = hanging
+    with pytest.raises(AudioSourceStuckError):
+        src.close()
+    touched: list[str] = []
+    monkeypatch.setattr(src, "_open_stream", lambda device: touched.append(device))
+    with pytest.raises(AudioSourceStuckError):
+        src.open("default")
+    assert touched == []  # a second PortAudio call could hang the capture thread too
+    hanging.release.set()
+
+
+def test_stuck_is_an_audio_source_error() -> None:
+    assert issubclass(AudioSourceStuckError, AudioSourceError)

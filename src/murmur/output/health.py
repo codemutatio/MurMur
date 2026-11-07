@@ -10,6 +10,11 @@ disambiguates: a fresh ``updated_at`` with recent ``last_transcribed_at`` is
 healthy; a fresh ``updated_at`` with climbing ``consecutive_errors`` is broken;
 a stale ``updated_at`` means the app isn't running at all.
 
+``audio`` says whether microphone audio is actually arriving: state "stalled"
+means the stream is open but silent at the driver level (no frames at all —
+not quiet speech), and "mic_stuck" means the audio stack hung and Murmur is
+restarting. Before this, a hung stream still reported "recording" for days.
+
 ``memory`` records the app's and the transcription worker's footprint, so a
 slow leak (the 15 GB one went unseen for weeks) shows up in the morning digest.
 """
@@ -47,6 +52,8 @@ class HealthReporter:
         is_paused: Callable[[], bool] = lambda: False,
         spool_dir: Path | None = None,
         worker_pid: Callable[[], int | None] = lambda: None,
+        audio: Callable[[], dict[str, Any] | None] = lambda: None,
+        stall_after_s: float = 120.0,
         footprint: Callable[[int], Any] | None = None,
         interval_s: float = 60.0,
     ) -> None:
@@ -57,6 +64,8 @@ class HealthReporter:
         self._spool_dir = spool_dir
         self._interval_s = interval_s
         self._worker_pid = worker_pid
+        self._audio = audio
+        self._stall_after_s = stall_after_s
         if footprint is None:
             from murmur.mac.memory import footprint as mac_footprint
 
@@ -103,8 +112,13 @@ class HealthReporter:
     # -- output ------------------------------------------------------------
     def snapshot(self, *, stopped: bool = False) -> dict[str, Any]:
         with self._lock:
+            audio = self._audio_locked()
             if stopped:
                 state = "stopped"
+            elif audio.get("stuck"):
+                state = "mic_stuck"
+            elif audio.get("stalled"):
+                state = "stalled"
             elif self._is_paused():
                 state = "paused"
             elif self._consecutive_errors >= 3:
@@ -134,8 +148,26 @@ class HealthReporter:
                 "segments_tagged_media": self._media_tagged,
                 "segments_tagged_call": self._call_tagged,
                 "media_segments_skipped": self._media_skipped,
+                "audio": audio,
                 "memory": self._memory_locked(),
             }
+
+    def _audio_locked(self) -> dict[str, Any]:
+        try:
+            a = self._audio()
+        except Exception:  # never let the heartbeat die on a status read
+            a = None
+        if not a:
+            return {}
+        last = a.get("last_frame_at")
+        age = self._now().timestamp() - last if last is not None else None
+        stalled = bool(a.get("stream_open")) and age is not None and age > self._stall_after_s
+        return {
+            "stream_open": bool(a.get("stream_open")),
+            "last_audio_at": _iso(datetime.fromtimestamp(last).astimezone()) if last else None,
+            "stalled": stalled,
+            "stuck": a.get("stuck"),
+        }
 
     def _memory_locked(self) -> dict[str, int | None]:
         """Footprints in MB. The worker comes and goes (it's released when idle),

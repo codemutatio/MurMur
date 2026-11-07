@@ -14,6 +14,42 @@ class AudioSourceError(Exception):
     """Raised when audio stream open fails or an unrecoverable error occurs."""
 
 
+class AudioSourceStuckError(AudioSourceError):
+    """A PortAudio/CoreAudio call never returned.
+
+    Seen after sleep/wake (2026-11-04): ``stream.stop()`` deadlocked against
+    CoreAudio's IO thread and capture silently stopped for three days. The
+    stuck thread can't be cancelled and PortAudio is unusable in this process
+    afterwards, so the only recovery is a fresh process.
+    """
+
+
+# A healthy stop/close/open takes milliseconds; this is generous.
+CALL_TIMEOUT_S: float = 10.0
+
+
+def _bounded(fn: Any, what: str, timeout: float) -> Any:
+    """Run ``fn`` on a helper thread; raise AudioSourceStuckError if it doesn't return."""
+    done = threading.Event()
+    out: list[Any] = []
+    err: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            out.append(fn())
+        except BaseException as exc:  # re-raised on the caller's thread
+            err.append(exc)
+        finally:
+            done.set()
+
+    threading.Thread(target=run, name=f"audio-{what}", daemon=True).start()
+    if not done.wait(timeout):
+        raise AudioSourceStuckError(f"{what} did not return within {timeout:.0f} s")
+    if err:
+        raise err[0]
+    return out[0] if out else None
+
+
 class AudioSource(Protocol):
     """Protocol for an audio input source."""
 
@@ -43,19 +79,37 @@ class SounddeviceSource:
         - ADR-1: the PortAudio callback does exactly one thing — put_nowait into
           frames_q.  It touches no instance state (F-6: callback ownership rule).
         - Thread affinity: constructed and used only on the capture-engine thread.
+          Stream calls run on a short-lived helper thread only so they can be
+          timed out (see AudioSourceStuckError); the caller always waits for them.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, call_timeout_s: float = CALL_TIMEOUT_S) -> None:
         self._stream: Any = None
         self._frames_q: queue.Queue[np.ndarray] = queue.Queue(maxsize=100)
         self._lock = threading.Lock()
+        self._timeout = call_timeout_s
+        self._stuck: str | None = None  # once set, PortAudio is not touched again
+
+    def _check_stuck(self) -> None:
+        if self._stuck is not None:
+            raise AudioSourceStuckError(self._stuck)
 
     def open(self, device: str) -> None:
+        self.close()
+        self._check_stuck()
+        try:
+            stream = _bounded(lambda: self._open_stream(device), "stream open", self._timeout)
+        except AudioSourceStuckError as exc:
+            self._stuck = str(exc)
+            raise
+        with self._lock:
+            self._stream = stream
+
+    def _open_stream(self, device: str) -> Any:
         import sounddevice as sd
 
         from murmur.audio import FRAME_SAMPLES, SAMPLE_RATE
 
-        self.close()
         # Re-initialize PortAudio so it re-reads the device list.
         sd._terminate()  # private PortAudio API — reinitialises device list
         sd._initialize()
@@ -90,18 +144,26 @@ class SounddeviceSource:
             stream.start()
         except Exception as exc:
             raise AudioSourceError(str(exc)) from exc
-
-        with self._lock:
-            self._stream = stream
+        return stream
 
     def close(self) -> None:
         with self._lock:
             stream = self._stream
             self._stream = None
-        if stream is not None:
+        if stream is None:
+            return
+        self._check_stuck()
+
+        def stop_and_close() -> None:
             with contextlib.suppress(Exception):
                 stream.stop()
                 stream.close()
+
+        try:
+            _bounded(stop_and_close, "stream close", self._timeout)
+        except AudioSourceStuckError as exc:
+            self._stuck = str(exc)
+            raise
 
     def read(self, timeout: float) -> np.ndarray | None:
         try:

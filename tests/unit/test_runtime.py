@@ -220,3 +220,41 @@ def test_signal_handler_without_hook_is_safe(tmp_path: Path) -> None:
     runtime = Runtime(_make_config(tmp_path), _make_paths(tmp_path))
     runtime._signal_handler(signalmod.SIGTERM, None)  # must not raise
     assert runtime._stop_event.is_set()
+
+
+# --- hung audio stack → relaunch ------------------------------------------------------
+
+
+def test_stuck_audio_relaunches_but_not_in_a_loop(tmp_path: Path) -> None:
+    config = _make_config(tmp_path)
+    paths = _make_paths(tmp_path)
+    notifier = RecordingNotifier()
+    runtime = Runtime(config, paths, notifier=notifier, now=FixedClock())
+    relaunches: list[int] = []
+    runtime._relaunch = lambda: relaunches.append(1)  # type: ignore[method-assign]
+    for _ in range(5):
+        runtime._on_audio_stuck("stream close did not return within 10 s")
+    assert len(relaunches) == Runtime._MAX_RESTARTS  # then it gives up and asks for a reboot
+    assert any("restart your Mac" in m for _t, m in notifier.notifications)
+
+
+def test_relaunch_reopens_the_app_bundle(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import subprocess
+    import sys
+
+    import murmur.runtime as rt
+
+    runtime = Runtime(_make_config(tmp_path), _make_paths(tmp_path), now=FixedClock())
+    spawned: list[list[str]] = []
+    exits: list[int] = []
+    monkeypatch.setattr(sys, "frozen", "macosx_app", raising=False)
+    monkeypatch.setattr(subprocess, "Popen", lambda args, **kw: spawned.append(args))
+    monkeypatch.setattr(rt.os, "_exit", exits.append)
+    monkeypatch.setattr(rt.logging, "shutdown", lambda: None)
+    runtime._relaunch()
+    assert exits == [0]
+    assert spawned and spawned[0][:2] == ["/bin/sh", "-c"] and "open -b" in spawned[0][2]
+
+    monkeypatch.delattr(sys, "frozen")
+    runtime._relaunch()
+    assert exits == [0, 75]  # headless: launchd KeepAlive restarts it

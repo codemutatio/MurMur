@@ -8,6 +8,11 @@ Gate ordering (checked each tick, in priority order):
   2. Mic permission ≠ GRANTED → ensure closed, icon ⚠ + one-shot notification
   3. Disk < 2 GiB → flush, close, icon ⚠ + one-shot notification
   4. All clear → open stream if not open, icon ●
+
+If the audio stack itself hangs (a stream call never returns — seen after
+sleep/wake), capture can't recover in-process: the engine flags it, notifies,
+and calls ``on_stuck`` so the app restarts itself instead of silently
+"recording" nothing for days.
 """
 
 from __future__ import annotations
@@ -28,7 +33,7 @@ from murmur.audio import (
     WATCHDOG_STALL_S,
 )
 from murmur.audio.segmenter import Segmenter
-from murmur.audio.source import AudioSource, AudioSourceError
+from murmur.audio.source import AudioSource, AudioSourceError, AudioSourceStuckError
 from murmur.audio.spool import write_segment_wav
 from murmur.control import Controller, IconState, StatusBoard
 from murmur.mac.permissions import PermissionStatus, request_microphone_access
@@ -56,6 +61,7 @@ class CaptureEngine(threading.Thread):
         stop: threading.Event,
         device: str = "default",
         request_mic_access: Callable[[], None] | None = None,
+        on_stuck: Callable[[str], None] | None = None,
     ) -> None:
         super().__init__(name="capture-engine", daemon=True)
         self._source = source
@@ -74,6 +80,30 @@ class CaptureEngine(threading.Thread):
         self._backlog_drained = backlog_drained
         self._stop_event = stop
         self._device = device
+        self._on_stuck = on_stuck or (lambda _reason: None)
+        # Liveness, read by the health heartbeat (plain attribute reads are safe).
+        self.stream_open = False
+        self.last_frame_at: float | None = None  # time.time() of the newest frame
+        self.stuck: str | None = None
+
+    def audio_status(self) -> dict[str, object]:
+        """Snapshot for the heartbeat: is audio expected, and when did it last arrive."""
+        return {
+            "stream_open": self.stream_open,
+            "last_frame_at": self.last_frame_at,
+            "stuck": self.stuck,
+        }
+
+    def _handle_stuck(self, exc: AudioSourceStuckError) -> None:
+        self.stuck = str(exc)
+        self.stream_open = False
+        _log.error("Audio input is stuck (%s); Murmur must restart to recover capture", exc)
+        self._status.set_icon(IconState.ERROR)
+        self._status.set_notice("Microphone stuck — restarting")
+        self._notifier.notify(  # type: ignore[attr-defined]
+            "Murmur", "The microphone got stuck (usually after sleep). Restarting Murmur."
+        )
+        self._on_stuck(str(exc))
 
     def run(self) -> None:
         # Wait for the backlog to drain before opening the mic stream (R-16/E-6)
@@ -95,7 +125,11 @@ class CaptureEngine(threading.Thread):
         requested_mic_access = False
 
         while not self._stop_event.is_set():
+            if self.stuck is not None:  # nothing more this process can do
+                self._stop_event.wait(timeout=1.0)
+                continue
             try:
+                self.stream_open = stream_open
                 now_mono = time.monotonic()
 
                 # --- Gate 1: Paused ---
@@ -186,6 +220,8 @@ class CaptureEngine(threading.Thread):
                         self._status.set_icon(IconState.RECORDING)
                         self._status.set_notice(None)
                         _log.info("Stream opened on device signature: %r", sig)
+                    except AudioSourceStuckError:
+                        raise  # handled by the loop guard: needs a restart, not a retry
                     except AudioSourceError as exc:
                         self._status.set_icon(IconState.ERROR)
                         self._status.set_notice("No input device")
@@ -222,6 +258,7 @@ class CaptureEngine(threading.Thread):
                     continue
 
                 last_frame_time = time.monotonic()
+                self.last_frame_at = time.time()
 
                 # Feed to segmenter
                 try:
@@ -233,6 +270,9 @@ class CaptureEngine(threading.Thread):
                 for seg in segments:
                     self._emit_segment(seg)
 
+            except AudioSourceStuckError as exc:
+                stream_open = False
+                self._handle_stuck(exc)
             except Exception as exc:
                 # Outer guard (F-5): an unexpected exception from any of the above
                 # (e.g. sd._terminate()/_initialize() raises during reopen, plan Risk 3)
@@ -245,8 +285,12 @@ class CaptureEngine(threading.Thread):
                 time.sleep(1.0)
 
         # Shutdown
-        if stream_open:
-            self._flush_and_close()
+        if stream_open and self.stuck is None:
+            try:
+                self._flush_and_close()
+            except AudioSourceStuckError as exc:
+                _log.error("Audio input stuck at shutdown: %s", exc)
+        self.stream_open = False
         _log.info("Capture engine stopped")
 
     def _flush_and_close(self) -> None:

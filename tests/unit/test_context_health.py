@@ -294,6 +294,30 @@ def test_real_footprint_of_this_process() -> None:
     assert footprint(2**22 + 12345) is None  # no such process
 
 
+def test_health_flags_a_silent_stream_and_a_stuck_mic(tmp_path: Path) -> None:
+    clock = FixedClock(datetime(2026, 11, 7, 18, 0, tzinfo=UTC))
+    now = clock().timestamp()
+    audio: dict[str, object] = {"stream_open": True, "last_frame_at": now - 5, "stuck": None}
+    h = HealthReporter(tmp_path / "h.json", model="large-v3", now=clock, audio=lambda: audio)
+    snap = h.snapshot()
+    assert snap["state"] == "recording" and snap["audio"]["stalled"] is False
+    assert snap["audio"]["last_audio_at"] is not None
+    audio["last_frame_at"] = now - 600  # open but no frames for 10 min
+    assert h.snapshot()["state"] == "stalled"
+    audio["stream_open"] = False  # paused / closed on purpose: silence is expected
+    assert h.snapshot()["state"] == "recording"
+    audio["stuck"] = "stream close did not return within 10 s"
+    assert h.snapshot()["state"] == "mic_stuck"
+
+
+def test_health_survives_a_failing_audio_probe(tmp_path: Path) -> None:
+    def boom() -> dict[str, object]:
+        raise RuntimeError("engine gone")
+
+    h = HealthReporter(tmp_path / "h.json", model="m", now=FixedClock(datetime(2026, 11, 7, tzinfo=UTC)), audio=boom)
+    assert h.snapshot()["state"] == "recording" and h.snapshot()["audio"] == {}
+
+
 # --- config -----------------------------------------------------------------------
 
 

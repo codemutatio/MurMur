@@ -424,3 +424,45 @@ def test_unexpected_exception_does_not_kill_capture_thread_f5(
 
     # Thread must have run to completion (joined cleanly)
     assert not engine.is_alive(), "Capture engine thread should have exited cleanly"
+
+
+# --- hung audio stack -----------------------------------------------------------------
+
+
+def test_stuck_stream_triggers_restart_and_stops_touching_audio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import murmur.audio.engine as engine_mod
+
+    monkeypatch.setattr(engine_mod, "WATCHDOG_STALL_S", 0.05)
+    src = FakeAudioSource()  # no frames → watchdog fires → close() hangs
+    src.close_stuck = True
+    engine, src, status, notifier, stop, _clock, _store = _make_engine(tmp_path, source=src)
+    reasons: list[str] = []
+    engine._on_stuck = reasons.append
+    engine.start()
+    deadline = time.monotonic() + 5
+    while not reasons and time.monotonic() < deadline:
+        time.sleep(0.02)
+    time.sleep(0.3)
+    stop.set()
+    engine.join(timeout=3)
+    assert len(reasons) == 1 and "did not return" in reasons[0]
+    assert engine.audio_status()["stuck"] and engine.audio_status()["stream_open"] is False
+    assert status.snapshot().icon == IconState.ERROR
+    assert any("stuck" in m.lower() for _t, m in notifier.notifications)
+    assert src.close_calls == 1  # never retried the hung stream
+
+
+def test_audio_status_tracks_frames(tmp_path: Path) -> None:
+    src = FakeAudioSource(frames=[_silence_frame()] * 5)
+    engine, src, _status, _n, stop, _c, _s = _make_engine(tmp_path, source=src)
+    assert engine.audio_status() == {"stream_open": False, "last_frame_at": None, "stuck": None}
+    engine.start()
+    deadline = time.monotonic() + 3
+    while engine.last_frame_at is None and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert engine.audio_status()["stream_open"] is True
+    assert engine.last_frame_at is not None and abs(engine.last_frame_at - time.time()) < 5
+    stop.set()
+    engine.join(timeout=3)
